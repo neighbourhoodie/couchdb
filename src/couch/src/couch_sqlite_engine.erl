@@ -79,7 +79,8 @@ init(FilePath, _Options) ->
         "CREATE INDEX IF NOT EXISTS idrev ON documents (id, rev)",
         "CREATE INDEX IF NOT EXISTS seq ON documents (seq)",
         "CREATE INDEX IF NOT EXISTS deleted ON documents (deleted)",
-        "CREATE INDEX IF NOT EXISTS latest ON documents (latest)"
+        "CREATE INDEX IF NOT EXISTS latest ON documents (latest)",
+        "CREATE INDEX IF NOT EXISTS latest ON documents (rowid)"
     ],
     ok = esqlite3:exec(Meta, Db),
     ok = esqlite3:exec(Documents, Db),
@@ -112,15 +113,28 @@ last_activity(_St) -> os:timestamp().
 get_compacted_seq(_St) ->
     couch_log:info("~n> get_compacted_seq()~n", []),
     0.
-get_del_doc_count(_St) ->
+get_del_doc_count(Db) ->
     couch_log:info("~n> get_del_doc_count()~n", []),
-    0.
+    SQL = "SELECT COUNT(*) FROM documents WHERE latest=1 AND deleted=1",
+    case esqlite3:q(SQL, Db) of
+        [] -> 0;
+        [{DelDocCount}] ->
+            couch_log:info("~n< get_del_doc_count() -> ~p~n", [DelDocCount]),
+            DelDocCount
+    end.
+
 get_disk_version(_St) ->
     couch_log:info("~n> get_disk_version()~n", []),
     1.
-get_doc_count(_St) ->
+get_doc_count(Db) ->
     couch_log:info("~n> get_doc_count()~n", []),
-    0.
+    SQL = "SELECT COUNT(*) FROM documents WHERE latest=1 AND deleted=0",
+    case esqlite3:q(SQL, Db) of
+        [] -> 0;
+        [{DocCount}] ->
+            couch_log:info("~n< get_doc_count() -> ~p~n", [DocCount]),
+            DocCount
+    end.
 get_epochs(_St) ->
     couch_log:info("~n> get_epochs()~n", []),
     0.
@@ -128,7 +142,7 @@ get_purge_seq(_St) ->
     couch_log:info("~n> get_purge_seq()~n", []),
     0.
 get_oldest_purge_seq(_St) ->
-    couch_log:info("~n> get_oldest_purge_seq()~n", []),
+    couch_log:info("~n> get_ol, Dbdest_purge_seq()~n", []),
     0.
 get_purge_infos_limit(_St) ->
     couch_log:info("~n> get_purge_infos_limit()~n", []),
@@ -146,9 +160,17 @@ get_size_info(_St) ->
         {active, 234},
         {external, 345}
     ].
-get_update_seq(_St) ->
+get_update_seq(Db) ->
     couch_log:info("~n> get_update_seq()~n", []),
-    0.
+    SQL = "SELECT rowid FROM documents ORDER BY rowid DESC LIMIT 1;",
+    case esqlite3:q(SQL, Db) of
+        [] -> 0;
+        [{undefined}] -> 0;
+        [{UpdateSeq}] ->
+            couch_log:info("~n< get_update_seq() -> ~p~n", [UpdateSeq]),
+            UpdateSeq
+    end.
+
 get_uuid(_St) ->
     couch_log:info("~n> get_uuid()~n", []),
     666.
