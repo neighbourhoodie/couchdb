@@ -342,9 +342,11 @@ count_changes_since(_Db, SinceSeq) ->
 
 start_compaction(Db, DbName, Options, Parent) ->
     couch_log:info("~n> start_compaction(DbName: ~p, Options: ~p)~n", [DbName, Options]),
-    SQL = "DELETE FROM documents WHERE latest != 1;",
     Pid = spawn_link(fun() ->
+        SQL = "DELETE FROM documents WHERE latest != 1;",
         ok = esqlite3:exec(SQL, Db),
+        SQL2 = "VACUUM;",
+        ok = esqlite3:exec(SQL2, Db),
         gen_server:cast(Parent, {compact_done, ?MODULE, {}})
     end),
     {ok, Db, Pid}.
