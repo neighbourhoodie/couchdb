@@ -15,7 +15,7 @@
 -export([to_doc_info/1,to_doc_info_path/1,parse_rev/1,parse_revs/1,rev_to_str/1,revs_to_strs/1]).
 -export([from_json_obj/1, from_json_obj_validate/1]).
 -export([from_json_obj/2, from_json_obj_validate/2]).
--export([to_json_obj/2, has_stubs/1, merge_stubs/2]).
+-export([to_json_obj/2, to_json_rev/2, has_stubs/1, merge_stubs/2]).
 -export([validate_docid/1, validate_docid/2, get_validate_doc_fun/1]).
 -export([doc_from_multi_part_stream/2, doc_from_multi_part_stream/3]).
 -export([doc_from_multi_part_stream/4]).
