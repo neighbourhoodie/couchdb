@@ -321,11 +321,54 @@ is_active_stream(_Db, _Stream) ->
     couch_log:info("~n> is_active_stream()~n", []),
     ok.
 
-fold_docs(_Db, _UserFun, UserAcc, Options) ->
+% This function is called to fold over the documents in
+% the database sorted by the raw byte collation order of
+% the document id. For each document id, the supplied user
+% function should be invoked with the first argument set
+% to the #full_doc_info{} record and the second argument
+% set to the current user supplied accumulator.
+
+% TODO: UserFun needs OffsetReductions as second para, Acc as third
+
+% The return
+% value of the user function is a 2-tuple of {Go, NewUserAcc}.
+% The NewUserAcc value should then replace the current
+% user accumulator. If Go is the atom ok, iteration over
+% documents should continue. If Go is the atom stop, then
+% iteration should halt and the return value should be
+% {ok, NewUserAcc}.
+%
+fold_docs(Db, UserFun, UserAcc, Options) ->
+    % TODO: Options
     couch_log:info("~n> fold_docs(_, _, _, Options: ~p)~n", [Options]),
+    SQL0 = "SELECT id, rowid, revtree FROM documents WHERE latest = 1 AND deleted = 0",
+    AdditionalWhere = options_to_sql(Options),
+    SQL1 = SQL0 ++ AdditionalWhere,
+    Order = options_to_order_sql(Options),
+    SQL = SQL1 ++ Order,
+    couch_log:info("~n> fold_docs() SQL: ~p~n", [SQL]),
+    Result = esqlite3:q(SQL, Db),
+    FinalNewUserAcc = lists:foldl(fun({Id, RowId, RevTree0}, Acc) -> 
+        RevTree = case RevTree0 of
+            undefined -> [];
+            _Else -> binary_to_term(base64:decode(RevTree0))
+        end,
+        FDI = #full_doc_info{
+            id = Id,
+            rev_tree = RevTree,
+            deleted = false,
+            update_seq = RowId,
+            sizes = #size_info{}
+        },
+        couch_log:info("~n> UserFun()~p~n", [UserFun]),
+        case UserFun(FDI, {[], []}, Acc) of
+            {ok, NewUserAcc} -> NewUserAcc;
+            {stop, LastUserAcc} -> LastUserAcc % TODO: actually stop
+        end
+    end, UserAcc, Result),
     case lists:member(include_reductions, Options) of
-        true -> {ok, 0, UserAcc};
-        _False -> {ok, UserAcc}
+        true -> {ok, 0, FinalNewUserAcc};
+        _False -> {ok, FinalNewUserAcc}
     end.
 fold_local_docs(_Db, _UserFun, _UserAcc, Options) ->
     couch_log:info("~n> fold_local_docs(~p)~n", [Options]),
@@ -353,3 +396,37 @@ start_compaction(Db, DbName, Options, Parent) ->
 finish_compaction(Db, DbName, Options, _CompactFilePath) ->
     couch_log:info("~n> finish_compaction(DbName: ~p, Options: ~p)~n", [DbName, Options]),
     {ok, Db, undefined}.
+
+
+% Utilities
+% [include_reductions,{dir,fwd},{start_key,<<"asd">>},{end_key,<<"?">>},{finalizer,null},{namespace,undefined}]
+options_to_sql(Options) ->
+    options_to_sql_int(Options, []).
+
+options_to_sql_int([], SQL) ->
+    lists:flatten(SQL);
+options_to_sql_int([Option | Rest], SQL0) ->
+    couch_log:info("~n>option_to_sql(~pOption)~n", [Option]),
+    SQL = option_to_sql(Option, SQL0),
+    options_to_sql_int(Rest, SQL).
+
+% TODO: maybe swap startkey/endkey if dir=rev
+
+option_to_sql({start_key, StartKey}, SQL) ->
+    [" AND id >= '" ++ ?b2l(StartKey) ++ "'"| SQL];
+option_to_sql({end_key, EndKey}, SQL) ->
+    [" AND id <= '" ++ ?b2l(EndKey) ++ "'"| SQL];
+% option_to_sql({dir, Dir}, SQL) ->
+%     SQLDir = case Dir of
+%         fwd -> "ASC";
+%         _Else -> "DESC"
+%     end,
+%     ["ORDER BY docid " ++ SQLDir | SQL];
+option_to_sql(_, SQL) ->
+    SQL.
+
+options_to_order_sql(Options) ->
+    parse_order(proplists:get_value(dir, Options, fwd)).
+
+parse_order(fwd) -> " ORDER BY id ASC";
+parse_order(rev) -> " ORDER BY id DESC".
