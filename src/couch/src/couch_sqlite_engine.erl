@@ -149,9 +149,15 @@ get_doc_count(Db) ->
             couch_log:info("~n< get_doc_count() -> ~p~n", [DocCount]),
             DocCount
     end.
-get_epochs(_Db) ->
+get_epochs(Db) ->
     couch_log:info("~n> get_epochs()~n", []),
-    0.
+    SQL = "SELECT MAX(rowid) FROM documents WHERE latest=1 AND deleted=0",
+    case esqlite3:q(SQL, Db) of
+        [] -> 0;
+        [{MaxRowId}] ->
+            couch_log:info("~n< get_epochs() -> ~p~n", [MaxRowId]),
+            [{node(), MaxRowId}]
+    end.
 get_purge_seq(_Db) ->
     couch_log:info("~n> get_purge_seq()~n", []),
     0.
@@ -187,7 +193,7 @@ get_update_seq(Db) ->
 
 get_uuid(_Db) ->
     couch_log:info("~n> get_uuid()~n", []),
-    666.
+    <<"666666666666666666666666">>.
 
 set_revs_limit(_Db, _Val) -> ok.
 set_purge_infos_limit(_Db, _Val) -> ok.
@@ -350,18 +356,17 @@ fold_docs(Db, UserFun, UserAcc, Options) ->
     fold_docs_int(Db, UserFun, UserAcc, Options, global).
 fold_local_docs(Db, UserFun, UserAcc, Options) ->
     couch_log:info("~n> fold_local_docs(_, _, _, Options: ~p)~n", [Options]),
-   fold_docs_int(Db, UserFun, UserAcc, Options, local).
+    fold_docs_int(Db, UserFun, UserAcc, Options, local).
 fold_docs_int(Db, UserFun, UserAcc, Options, Type) ->
-    % TODO: Options
     couch_log:info("~n> fold_docs(_, _, _, Options: ~p)~n", [Options]),
     SQL0 = "SELECT id, rowid, revtree, rev FROM documents WHERE latest = 1 AND deleted = 0 ",
     LocalSQL = case Type of
         local -> "AND local = 1 ";
         _Global -> "AND local != 1 "
     end,
-    AdditionalWhere = options_to_sql(Options),
+    AdditionalWhere = options_to_sql(Options, Type),
     SQL1 = SQL0 ++ LocalSQL ++ AdditionalWhere,
-    Order = options_to_order_sql(Options),
+    Order = options_to_order_sql(Options, Type),
     SQL = SQL1 ++ Order,
     couch_log:info("~n> fold_docs() SQL: ~p~n", [SQL]),
     Result = esqlite3:q(SQL, Db),
@@ -387,9 +392,17 @@ fold_docs_int(Db, UserFun, UserAcc, Options, Type) ->
                 }
             end,
         couch_log:info("~n> UserFun()~p~n", [UserFun]),
-        case UserFun(FDI, {[], []}, Acc) of
-            {ok, NewUserAcc} -> NewUserAcc;
-            {stop, LastUserAcc} -> LastUserAcc % TODO: actually stop
+        case Type of
+            changes -> 
+                case UserFun(couch_doc:to_doc_info(FDI), Acc) of
+                    {ok, NewUserAcc} -> NewUserAcc;
+                    {stop, LastUserAcc} -> LastUserAcc % TODO: actually stop
+                end;
+            _Other ->
+                case UserFun(FDI, {[], []}, Acc) of
+                    {ok, NewUserAcc} -> NewUserAcc;
+                    {stop, LastUserAcc} -> LastUserAcc % TODO: actually stop
+                end
         end
     end, UserAcc, Result),
     case lists:member(include_reductions, Options) of
@@ -397,15 +410,16 @@ fold_docs_int(Db, UserFun, UserAcc, Options, Type) ->
         _False -> {ok, FinalNewUserAcc}
     end.
 
-fold_changes(_Db, _SinceSeq, _UserFun, _UserAcc, Options) ->
+fold_changes(Db, SinceSeq, UserFun, UserAcc, Options0) ->
+    Options = [{stert_key, SinceSeq} | Options0],
     couch_log:info("~n> fold_changes(~p)~n", [Options]),
-    ok.
+    fold_docs_int(Db, UserFun, UserAcc, Options, changes).
 fold_purge_infos(_Db, _StartSeq, _UserFun, _UserAcc, Options) ->
     couch_log:info("~n> fold_purge_infos(~p)~n", [Options]),
     ok.
-count_changes_since(_Db, SinceSeq) ->
+count_changes_since(Db, SinceSeq) ->
     couch_log:info("~n> count_changes_since(~p)~n", [SinceSeq]),
-    ok.
+    get_update_seq(Db) - SinceSeq.
 
 start_compaction(Db, DbName, Options, Parent) ->
     couch_log:info("~n> start_compaction(DbName: ~p, Options: ~p)~n", [DbName, Options]),
@@ -424,19 +438,26 @@ finish_compaction(Db, DbName, Options, _CompactFilePath) ->
 
 % Utilities
 % [include_reductions,{dir,fwd},{start_key,<<"asd">>},{end_key,<<"?">>},{finalizer,null},{namespace,undefined}]
-options_to_sql(Options) ->
-    StartKey = proplists:get_value(start_key, Options),
-    EndKey = proplists:get_value(end_key, Options),
+options_to_sql(Options, Type) ->
+    StartKey = proplists:get_value(start_key, Options, <<"0">>),
+    EndKey = proplists:get_value(end_key, Options, <<"">>),
     Dir = proplists:get_value(dir, Options, fwd),
-    case Dir of
-        fwd ->
-            " AND id >= '" ++ ?b2l(StartKey) ++ "' AND id <= '" ++ ?b2l(EndKey) ++ "'";
-        _Rev ->
-            " AND id >= '" ++ ?b2l(EndKey) ++ "' AND id <= '" ++ ?b2l(StartKey) ++ "'"
+    case Type of
+        changes ->
+            " AND rowid >= " ++ ?b2l(StartKey) ++ " AND rowid <= '" ++ ?b2l(EndKey) ++ "'";
+        _Else ->
+            case Dir of
+                fwd ->
+                    " AND id >= '" ++ ?b2l(StartKey) ++ "' AND id <= '" ++ ?b2l(EndKey) ++ "'";
+                _Rev ->
+                    " AND id >= '" ++ ?b2l(EndKey) ++ "' AND id <= '" ++ ?b2l(StartKey) ++ "'"
+            end
     end.
 
-options_to_order_sql(Options) ->
-    parse_order(proplists:get_value(dir, Options, fwd)).
+options_to_order_sql(Options, Type) ->
+    parse_order(proplists:get_value(dir, Options, fwd), Type).
 
-parse_order(fwd) -> " ORDER BY id ASC";
-parse_order(rev) -> " ORDER BY id DESC".
+parse_order(fwd, changes) -> " ORDER BY rowid ASC";
+parse_order(rev, changes) -> " ORDER BY rowid DESC";
+parse_order(fwd, _) -> " ORDER BY id ASC";
+parse_order(rev, _) -> " ORDER BY id DESC".
