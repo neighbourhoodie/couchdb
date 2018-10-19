@@ -80,7 +80,14 @@ init(FilePath, _Options) ->
     Meta = "CREATE TABLE IF NOT EXISTS meta ("
         ++ "key TEXT, value TEXT)",
     Documents = "CREATE TABLE IF NOT EXISTS documents ("
-        ++ "id TEXT, rev TEXT, revtree TEXT, deleted INT, latest INT, local INT, body BLOB, UNIQUE(id, rev))",
+        ++ "id TEXT, "
+        ++ "rev TEXT, "
+        ++ "revtree TEXT, "
+        ++ "deleted INT DEFAULT 0, "
+        ++ "latest INT DEFAULT 1, "
+        ++ "local INT DEFAULT 0, "
+        ++ "body BLOB, "
+        ++ "UNIQUE(id, rev))",
     DocumentsIndexes = [
         "CREATE INDEX IF NOT EXISTS id ON documents (id)",
         "CREATE INDEX IF NOT EXISTS idrev ON documents (id, rev)",
@@ -296,7 +303,7 @@ write_doc_infos(Db, Pairs, LocalDocs) ->
         couch_log:info("~n> LocalDoc: ~p, JsonRevs: ~p~n", [LocalDoc, JsonRevs]),
         JsonDoc = couch_util:json_encode(couch_doc:to_json_obj(LocalDoc, [])),
         couch_log:info("~n> JsonDoc: ~p~n", [JsonDoc]),
-        SQL = "INSERT INTO documents (id, rev, body, local, latest) VALUES (?1, ?2, ?3, 1, 1)",
+        SQL = "INSERT INTO documents (id, rev, body, local, latest, deleted) VALUES (?1, ?2, ?3, 1, 1, 0)",
         {ok, Upsert} = esqlite3:prepare(SQL, Db),
         ok = esqlite3:bind(Upsert, [Id, JsonRevs, JsonDoc]),
         '$done' = esqlite3:step(Upsert)
@@ -339,27 +346,46 @@ is_active_stream(_Db, _Stream) ->
 % {ok, NewUserAcc}.
 %
 fold_docs(Db, UserFun, UserAcc, Options) ->
+    couch_log:info("~n> fold_docs(_, _, _, Options: ~p)~n", [Options]),
+    fold_docs_int(Db, UserFun, UserAcc, Options, global).
+fold_local_docs(Db, UserFun, UserAcc, Options) ->
+    couch_log:info("~n> fold_local_docs(_, _, _, Options: ~p)~n", [Options]),
+   fold_docs_int(Db, UserFun, UserAcc, Options, local).
+fold_docs_int(Db, UserFun, UserAcc, Options, Type) ->
     % TODO: Options
     couch_log:info("~n> fold_docs(_, _, _, Options: ~p)~n", [Options]),
-    SQL0 = "SELECT id, rowid, revtree FROM documents WHERE latest = 1 AND deleted = 0",
+    SQL0 = "SELECT id, rowid, revtree, rev FROM documents WHERE latest = 1 AND deleted = 0 ",
+    LocalSQL = case Type of
+        local -> "AND local = 1 ";
+        _Global -> "AND local != 1 "
+    end,
     AdditionalWhere = options_to_sql(Options),
-    SQL1 = SQL0 ++ AdditionalWhere,
+    SQL1 = SQL0 ++ LocalSQL ++ AdditionalWhere,
     Order = options_to_order_sql(Options),
     SQL = SQL1 ++ Order,
     couch_log:info("~n> fold_docs() SQL: ~p~n", [SQL]),
     Result = esqlite3:q(SQL, Db),
-    FinalNewUserAcc = lists:foldl(fun({Id, RowId, RevTree0}, Acc) -> 
+    FinalNewUserAcc = lists:foldl(fun({Id, RowId, RevTree0, Rev}, Acc) ->
         RevTree = case RevTree0 of
             undefined -> [];
             _Else -> binary_to_term(base64:decode(RevTree0))
         end,
-        FDI = #full_doc_info{
-            id = Id,
-            rev_tree = RevTree,
-            deleted = false,
-            update_seq = RowId,
-            sizes = #size_info{}
-        },
+        FDI = case Type of
+            local ->
+                [Pos, RevId] = string:split(?b2l(Rev), "-"),
+                #doc{
+                    id = Id,
+                    revs = {list_to_integer(Pos), [RevId]}
+                };
+            _Global1 ->
+                #full_doc_info{
+                    id = Id,
+                    rev_tree = RevTree,
+                    deleted = false,
+                    update_seq = RowId,
+                    sizes = #size_info{}
+                }
+            end,
         couch_log:info("~n> UserFun()~p~n", [UserFun]),
         case UserFun(FDI, {[], []}, Acc) of
             {ok, NewUserAcc} -> NewUserAcc;
@@ -370,9 +396,7 @@ fold_docs(Db, UserFun, UserAcc, Options) ->
         true -> {ok, 0, FinalNewUserAcc};
         _False -> {ok, FinalNewUserAcc}
     end.
-fold_local_docs(_Db, _UserFun, _UserAcc, Options) ->
-    couch_log:info("~n> fold_local_docs(~p)~n", [Options]),
-    ok.
+
 fold_changes(_Db, _SinceSeq, _UserFun, _UserAcc, Options) ->
     couch_log:info("~n> fold_changes(~p)~n", [Options]),
     ok.
@@ -401,29 +425,15 @@ finish_compaction(Db, DbName, Options, _CompactFilePath) ->
 % Utilities
 % [include_reductions,{dir,fwd},{start_key,<<"asd">>},{end_key,<<"?">>},{finalizer,null},{namespace,undefined}]
 options_to_sql(Options) ->
-    options_to_sql_int(Options, []).
-
-options_to_sql_int([], SQL) ->
-    lists:flatten(SQL);
-options_to_sql_int([Option | Rest], SQL0) ->
-    couch_log:info("~n>option_to_sql(~pOption)~n", [Option]),
-    SQL = option_to_sql(Option, SQL0),
-    options_to_sql_int(Rest, SQL).
-
-% TODO: maybe swap startkey/endkey if dir=rev
-
-option_to_sql({start_key, StartKey}, SQL) ->
-    [" AND id >= '" ++ ?b2l(StartKey) ++ "'"| SQL];
-option_to_sql({end_key, EndKey}, SQL) ->
-    [" AND id <= '" ++ ?b2l(EndKey) ++ "'"| SQL];
-% option_to_sql({dir, Dir}, SQL) ->
-%     SQLDir = case Dir of
-%         fwd -> "ASC";
-%         _Else -> "DESC"
-%     end,
-%     ["ORDER BY docid " ++ SQLDir | SQL];
-option_to_sql(_, SQL) ->
-    SQL.
+    StartKey = proplists:get_value(start_key, Options),
+    EndKey = proplists:get_value(end_key, Options),
+    Dir = proplists:get_value(dir, Options, fwd),
+    case Dir of
+        fwd ->
+            " AND id >= '" ++ ?b2l(StartKey) ++ "' AND id <= '" ++ ?b2l(EndKey) ++ "'";
+        _Rev ->
+            " AND id >= '" ++ ?b2l(EndKey) ++ "' AND id <= '" ++ ?b2l(StartKey) ++ "'"
+    end.
 
 options_to_order_sql(Options) ->
     parse_order(proplists:get_value(dir, Options, fwd)).
