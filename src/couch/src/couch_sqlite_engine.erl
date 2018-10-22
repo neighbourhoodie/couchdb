@@ -72,6 +72,8 @@
   last_activity = 0
 }).
 
+-define(DISK_VERSION, 1).
+
 % TODO:
 % dont rely on rowid for changes, as vacuum might reorder things:
 %   The VACUUM command may change the ROWIDs of entries in any tables that do not have an explicit INTEGER PRIMARY KEY.
@@ -86,7 +88,7 @@ delete_compaction_files(_RootDir, _FilePath, _DelOpts) -> ok.
 init(FilePath, _Options) ->
     {ok, Db} = esqlite3:open(FilePath),
     Meta = "CREATE TABLE IF NOT EXISTS meta ("
-        ++ "key TEXT, value TEXT)",
+        ++ "key TEXT, value TEXT, UNIQUE(key))",
     Epochs = "CREATE TABLE IF NOT EXISTS epochs (node TEXT, seq INT, UNIQUE(node, seq))",
     Documents = "CREATE TABLE IF NOT EXISTS documents ("
         ++ "id TEXT, "
@@ -115,6 +117,10 @@ init(FilePath, _Options) ->
     % TODO Purges = "CREATE TABLE purges IF NOT EXISTS",
     % TODO Attachments = "CREATE TABLE attachments ()"
     State = init_state(Db),
+    case load_meta(uuid, Db) of
+        undefined -> init_uuid(Db);
+        _Else -> ok
+    end,
     {ok, State}.
 
 init_state(Db) ->
@@ -125,8 +131,6 @@ init_state(Db) ->
        epochs = Epochs,
        last_activity = os:timestamp()
     }.
-    % LastActivity = "INSERT INTO meta(key, value) VALUES (last_updated, NOW())",
-    % esqlite3:exec(LastActivity, Db)
 
 init_epochs(Db) ->
     SQL = "SELECT node, seq FROM epochs ORDER BY seq DESC;",
@@ -144,27 +148,61 @@ init_epochs(Db) ->
             throw({error, sqlite_engine_invalid_epoch_query})
     end.
 
-maybe_update_epochs(#sqldb{ update_epochs = false}) -> ok;
-maybe_update_epochs(#sqldb{ db = Db, epochs = [{Node, Seq} | _RestEpochs]}) ->
+init_uuid(Db) ->
+    UUID = couch_uuids:random(),
+    SQL = "INSERT INTO meta (key, value) VALUES (?1, ?2);",
+    {ok, Insert} = esqlite3:prepare(SQL, Db),
+    ok = esqlite3:bind(Insert, ["uuid", UUID]),
+    '$done' = esqlite3:step(Insert).
+
+maybe_update_epochs(#sqldb{ update_epochs = false} = State) -> State;
+maybe_update_epochs(#sqldb{ db = Db, epochs = [{Node, Seq} | _RestEpochs]} = State) ->
+    couch_log:info("~n> maybe_update_epochs(Node: ~p, Seq: ~p)~n", [Node, Seq]),
     SQL = "INSERT INTO epochs (node, seq) VALUES (?1, ?2)",
-    Insert = esqlite3:prepare(SQL, [Node, Seq], Db),
-    esqlite3:exec(Insert).
+    {ok, Insert} = esqlite3:prepare(SQL, Db),
+    ok = esqlite3:bind(Insert, [Node, Seq]),
+    '$done' = esqlite3:step(Insert),
+    State#sqldb{update_epochs = false}.
 
-terminate(_Reason, St) ->
-    esqlite3:close(St).
+terminate(Reason, #sqldb{db = Db}) ->
+    couch_log:info("~n> terminate(Reason: ~p)~n", [Reason]),
+    ok = esqlite3:close(Db).
     
-handle_db_updater_call(_Msg, _St) -> ok.
-handle_db_updater_info(_Msg, _St) -> ok.
+handle_db_updater_call(_Msg, State) -> {reply, ok, State}.
+handle_db_updater_info(_Msg, State) -> {noreply, State}.
 
-incref(St) -> {ok, St}.
+incref(State) -> {ok, State}.
 decref(_Db) -> ok.
 monitored_by(_Db) -> [].
 
 last_activity(#sqldb{last_activity = LastActivity}) -> LastActivity.
 
-get_compacted_seq(_Db) ->
+load_meta(Key, Db) ->
+    load_meta(Key, undefined, Db).
+
+load_meta(Key, Default, Db) when is_atom(Key) ->
+    load_meta(atom_to_list(Key), Default, Db);
+load_meta(Key, Default, Db) when is_list(Key) ->
+    SQL = "SELECT value FROM meta WHERE key = ?1",
+    case esqlite3:q(SQL, [Key], Db) of
+        [] -> Default;
+        [{Value}] -> Value
+    end;
+load_meta(_Key, _Default, _Db) ->
+    throw({error, sqlite_engine_invalid_meta_key}).
+
+write_meta(Key, Value, Db) when is_atom(Key) ->
+    write_meta(atom_to_list(Key), Value, Db);
+write_meta(Key, Value, Db) ->
+    SQL = "INSERT INTO meta (value) VALUES (?2) WHERE key = ?1",
+    Insert = esqlite3:prepare(SQL, Db),
+    ok = esqlite3:bind(Insert, [Key, Value]),
+    esqlite3:step(Insert).
+
+get_compacted_seq(#sqldb{db = Db}) ->
     couch_log:info("~n> get_compacted_seq()~n", []),
-    0.
+    load_meta(compacted_seq, Db).
+
 get_del_doc_count(#sqldb{db = Db}) ->
     couch_log:info("~n> get_del_doc_count()~n", []),
     SQL = "SELECT COUNT(*) FROM documents WHERE latest=1 AND deleted=1",
@@ -177,7 +215,7 @@ get_del_doc_count(#sqldb{db = Db}) ->
 
 get_disk_version(_Db) ->
     couch_log:info("~n> get_disk_version()~n", []),
-    1.
+    ?DISK_VERSION.
 get_doc_count(#sqldb{db = Db}) ->
     couch_log:info("~n> get_doc_count()~n", []),
     SQL = "SELECT COUNT(*) FROM documents WHERE latest=1 AND deleted=0",
@@ -196,22 +234,22 @@ get_epochs(#sqldb{db = Db}) ->
             couch_log:info("~n< get_epochs() -> ~p~n", [MaxRowId]),
             [{node(), MaxRowId}]
     end.
-get_purge_seq(_Db) ->
+get_purge_seq(#sqldb{db = Db}) ->
     couch_log:info("~n> get_purge_seq()~n", []),
-    0.
-get_oldest_purge_seq(_Db) ->
-    couch_log:info("~n> get_ol, Dbdest_purge_seq()~n", []),
-    0.
-get_purge_infos_limit(_Db) ->
+    list_to_integer(load_meta(purge_seq, "0", Db)).
+get_oldest_purge_seq(#sqldb{db = Db}) ->
+    couch_log:info("~n> get_oldest_purge_seq()~n", []),
+    list_to_integer(load_meta(oldest_purge_seq, "0", Db)).
+get_purge_infos_limit(#sqldb{db = Db}) ->
     couch_log:info("~n> get_purge_infos_limit()~n", []),
-    999.
-get_revs_limit(_Db) ->
+    list_to_integer(load_meta(purge_infos_limit,  "1000", Db)).
+get_revs_limit(#sqldb{db = Db}) ->
     couch_log:info("~n> get_revs_limit()~n", []),
-    888.
-get_security(_Db) ->
+    list_to_integer(load_meta(revs_limit, "1000", Db)).
+get_security(#sqldb{db = Db}) ->
     couch_log:info("~n> get_security()~n", []),
-    [].
-get_size_info(_Db) ->
+    load_meta(security, [], Db).
+get_size_info(#sqldb{db = _Db}) ->
     couch_log:info("~n> get_size_info()~n", []),
     [
         {file, 123},
@@ -222,7 +260,7 @@ get_size_info(_Db) ->
 get_update_seq(#sqldb{db = Db}) ->
     get_update_seq(Db);
 get_update_seq(Db) ->
-    couch_log:info("~n> get_update_seq()~n", []),
+    couch_log:info("~n> get_update_seq(Db: ~p)~n", [Db]),
     SQL = "SELECT rowid FROM documents ORDER BY rowid DESC LIMIT 1;",
     case esqlite3:q(SQL, Db) of
         [] -> 0;
@@ -232,13 +270,19 @@ get_update_seq(Db) ->
             UpdateSeq
     end.
 
-get_uuid(_Db) ->
+get_uuid(#sqldb{db = Db}) ->
     couch_log:info("~n> get_uuid()~n", []),
-    <<"666666666666666666666666">>.
+    load_meta(uuid, Db).
 
-set_revs_limit(_Db, _Val) -> ok.
-set_purge_infos_limit(_Db, _Val) -> ok.
-set_security(_Db, _Val) -> ok.
+set_revs_limit(#sqldb{db = Db} = State, Value) ->
+    ok = write_meta(revs_limit, Value, Db),
+    {ok, State}.
+set_purge_infos_limit(#sqldb{db = Db} = State, Value) ->
+    ok = write_meta(purge_infos_limit, Value, Db),
+    {ok, State}.
+set_security(#sqldb{db = Db} = State, Value) ->
+    ok = write_meta(security, Value, Db),
+    {ok, State}.
 
 open_docs(#sqldb{db = Db}, DocIds) ->
     couch_log:info("~n> open_docs(~p)~n", [DocIds]),
@@ -355,15 +399,15 @@ write_doc_infos(#sqldb{db = Db} = State, Pairs, LocalDocs) ->
         ok = esqlite3:bind(Upsert, [Id, JsonRevs, JsonDoc]),
         '$done' = esqlite3:step(Upsert)
     end, LocalDocs),
-    ok = maybe_update_epochs(State),
-    {ok, Db}.
+    NewState = maybe_update_epochs(State),
+    {ok, NewState}.
 purge_docs(_Db, _Pairs, _PurgeInfos) ->
     couch_log:info("~n> purge_docs()~n", []),
     ok.
 
-commit_data(#sqldb{db = Db}) ->
+commit_data(State) ->
     couch_log:info("~n> commit_data()~n", []),
-    {ok, Db}.
+    {ok, State}.
 
 open_write_stream(_Db, Options) ->
     couch_log:info("~n> open_write_stream(Options)~n", [Options]),
@@ -462,7 +506,7 @@ count_changes_since(#sqldb{db = Db}, SinceSeq) ->
     couch_log:info("~n> count_changes_since(~p)~n", [SinceSeq]),
     get_update_seq(Db) - SinceSeq.
 
-start_compaction(#sqldb{db = Db}, DbName, Options, Parent) ->
+start_compaction(#sqldb{db = Db} = State, DbName, Options, Parent) ->
     couch_log:info("~n> start_compaction(DbName: ~p, Options: ~p)~n", [DbName, Options]),
     Pid = spawn_link(fun() ->
         SQL = "DELETE FROM documents WHERE latest != 1;",
@@ -471,11 +515,13 @@ start_compaction(#sqldb{db = Db}, DbName, Options, Parent) ->
         ok = esqlite3:exec(SQL2, Db),
         gen_server:cast(Parent, {compact_done, ?MODULE, {}})
     end),
-    {ok, Db, Pid}.
+    {ok, State, Pid}.
 finish_compaction(#sqldb{db = Db} = State, DbName, Options, _CompactFilePath) ->
     couch_log:info("~n> finish_compaction(DbName: ~p, Options: ~p)~n", [DbName, Options]),
-    ok = maybe_update_epochs(State),
-    {ok, Db, undefined}.
+    Seq = get_update_seq(Db),
+    ok = write_meta(compacted_seq, Seq, Db),
+    NewState = maybe_update_epochs(State),
+    {ok, NewState, undefined}.
 
 
 % Utilities
