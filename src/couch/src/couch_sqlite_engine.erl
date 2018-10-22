@@ -194,10 +194,11 @@ load_meta(_Key, _Default, _Db) ->
 write_meta(Key, Value, Db) when is_atom(Key) ->
     write_meta(atom_to_list(Key), Value, Db);
 write_meta(Key, Value, Db) ->
-    SQL = "INSERT INTO meta (value) VALUES (?2) WHERE key = ?1",
-    Insert = esqlite3:prepare(SQL, Db),
+    SQL = "INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = '?2' WHERE key = '?1'",
+    {ok, Insert} = esqlite3:prepare(SQL, Db),
     ok = esqlite3:bind(Insert, [Key, Value]),
-    esqlite3:step(Insert).
+    '$done' = esqlite3:step(Insert),
+    ok.
 
 get_compacted_seq(#sqldb{db = Db}) ->
     couch_log:info("~n> get_compacted_seq()~n", []),
@@ -236,16 +237,16 @@ get_epochs(#sqldb{db = Db}) ->
     end.
 get_purge_seq(#sqldb{db = Db}) ->
     couch_log:info("~n> get_purge_seq()~n", []),
-    list_to_integer(load_meta(purge_seq, "0", Db)).
+    load_meta(purge_seq, 0, Db).
 get_oldest_purge_seq(#sqldb{db = Db}) ->
     couch_log:info("~n> get_oldest_purge_seq()~n", []),
-    list_to_integer(load_meta(oldest_purge_seq, "0", Db)).
+    load_meta(oldest_purge_seq, 0, Db).
 get_purge_infos_limit(#sqldb{db = Db}) ->
     couch_log:info("~n> get_purge_infos_limit()~n", []),
-    list_to_integer(load_meta(purge_infos_limit,  "1000", Db)).
+    load_meta(purge_infos_limit, 1000, Db).
 get_revs_limit(#sqldb{db = Db}) ->
     couch_log:info("~n> get_revs_limit()~n", []),
-    list_to_integer(load_meta(revs_limit, "1000", Db)).
+    load_meta(revs_limit, 1000, Db).
 get_security(#sqldb{db = Db}) ->
     couch_log:info("~n> get_security()~n", []),
     load_meta(security, [], Db).
