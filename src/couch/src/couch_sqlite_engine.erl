@@ -90,6 +90,11 @@ init(FilePath, _Options) ->
     Meta = "CREATE TABLE IF NOT EXISTS meta ("
         ++ "key TEXT, value TEXT, UNIQUE(key))",
     Epochs = "CREATE TABLE IF NOT EXISTS epochs (node TEXT, seq INT, UNIQUE(node, seq))",
+    Purges = "CREATE TABLE IF NOT EXISTS purges (purge_seq INT, uuid TEXT, docid TEXT, rev TEXT)",
+    PurgeIndexes = [
+        "CREATE INDEX IF NOT EXISTS purge_seq ON purges (purge_seq)",
+        "CREATE INDEX IF NOT EXISTS uuid ON purges (uuid)"
+    ],
     Documents = "CREATE TABLE IF NOT EXISTS documents ("
         ++ "id TEXT, "
         ++ "rev TEXT, "
@@ -110,10 +115,11 @@ init(FilePath, _Options) ->
     ],
     ok = esqlite3:exec(Meta, Db),
     ok = esqlite3:exec(Epochs, Db),
+    ok = esqlite3:exec(Purges, Db),
     ok = esqlite3:exec(Documents, Db),
     lists:foreach(fun (IdxDef) ->
         esqlite3:exec(IdxDef, Db)
-    end, DocumentsIndexes),
+    end, DocumentsIndexes ++ PurgeIndexes),
     % TODO Purges = "CREATE TABLE purges IF NOT EXISTS",
     % TODO Attachments = "CREATE TABLE attachments ()"
     State = init_state(Db),
@@ -402,8 +408,19 @@ write_doc_infos(#sqldb{db = Db} = State, Pairs, LocalDocs) ->
     end, LocalDocs),
     NewState = maybe_update_epochs(State),
     {ok, NewState}.
-purge_docs(_Db, _Pairs, _PurgeInfos) ->
-    couch_log:info("~n> purge_docs()~n", []),
+purge_docs(#sqldb{db = Db}=State, _Pairs, PurgeInfos) ->
+    couch_log:info("~n> purge_docs(PurgeInfos: ~p)~n", [PurgeInfos]),
+    lists:foreach(fun (PurgeInfo) -> write_purge_info(Db, PurgeInfo) end, PurgeInfos),
+    {ok, State}.
+
+write_purge_info(Db, {PurgeSeq, UUID, DocId, Revs}) ->
+    lists:foreach(fun (Rev) -> write_purge_info(Db, PurgeSeq, UUID, DocId, Rev) end, Revs).
+
+write_purge_info(Db, PurgeSeq, UUID, DocId, Rev) ->
+    SQL = "INSERT INTO purges (purge_seq, uuid, docid, rev) VALUES (?1, ?2, ?3, ?4)",
+    Insert = esqlite3:prepare(SQL, Db),
+    ok = esqlite3:bind(Insert, [PurgeSeq, UUID, DocId, Rev]),
+    ok = esqlite3:step(Insert),
     ok.
 
 commit_data(State) ->
