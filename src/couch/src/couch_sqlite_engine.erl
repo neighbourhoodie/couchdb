@@ -81,11 +81,14 @@
 % strip out _id and _rev from doc body
 
 
-exists(FilePath) -> filelib:is_file(FilePath).
+exists(FilePath) ->
+    couch_log:info("~n> exists(FilePath: ~p)~n", [FilePath]),
+    filelib:is_file(FilePath).
 delete(_RootDir, FilePath, _Async) -> file:delete(FilePath).
 delete_compaction_files(_RootDir, _FilePath, _DelOpts) -> ok.
 
 init(FilePath, _Options) ->
+    couch_log:info("~n> init(FilePath: ~p)~n", [FilePath]),
     {ok, Db} = esqlite3:open(FilePath),
     Meta = "CREATE TABLE IF NOT EXISTS meta ("
         ++ "key TEXT, value TEXT, UNIQUE(key))",
@@ -243,10 +246,25 @@ get_epochs(#sqldb{db = Db}) ->
     end.
 get_purge_seq(#sqldb{db = Db}) ->
     couch_log:info("~n> get_purge_seq()~n", []),
-    load_meta(purge_seq, 0, Db).
+    SQL = "SELECT MAX(purge_seq) FROM purges",
+    case esqlite3:q(SQL, Db) of
+        [] -> 0;
+        [{undefined}] -> 0;
+        [{PurgeSeq}] ->
+            couch_log:info("~n< get_purge_seq() -> ~p~n", [PurgeSeq]),
+            PurgeSeq
+    end.
+
 get_oldest_purge_seq(#sqldb{db = Db}) ->
     couch_log:info("~n> get_oldest_purge_seq()~n", []),
-    load_meta(oldest_purge_seq, 0, Db).
+    SQL = "SELECT MIN(purge_seq) FROM purges",
+    case esqlite3:q(SQL, Db) of
+        [] -> 0;
+        [{undefined}] -> 0;
+        [{PurgeSeq}] ->
+            couch_log:info("~n< get_oldest_purge_seq() -> ~p~n", [PurgeSeq]),
+            PurgeSeq
+    end.
 get_purge_infos_limit(#sqldb{db = Db}) ->
     couch_log:info("~n> get_purge_infos_limit()~n", []),
     load_meta(purge_infos_limit, 1000, Db).
@@ -352,9 +370,22 @@ read_doc_body(#sqldb{db = Db}, Doc) ->
         [{Body}] -> Body
     end,
     Doc#doc{body = couch_util:json_decode(Result)}.
-load_purge_infos(_Db, UUIDs) ->
+load_purge_infos(#sqldb{db = Db}, UUIDs) ->
     couch_log:info("~n> load_purge_infos(~p)~n", [UUIDs]),
-    ok.
+    lists:map(fun (UUID) -> load_purge_info(Db, UUID) end, UUIDs).
+
+load_purge_info(Db, UUID) ->
+    couch_log:info("~n> load_purge_info(~p)~n", [UUID]),
+    SQL = "SELECT purge_seq, docid, rev FROM purges WHERE uuid = ?1",
+    case esqlite3:q(SQL, [UUID], Db) of
+        [] ->
+            not_found;
+        Result ->
+            couch_log:info("~n>  Result: ~p~n", [Result]),
+            lists:foldl(fun({PurgeSeq, DocId, Rev}, {_PurgeSeq, _DocId, Revs}) ->
+                {PurgeSeq, DocId, [Rev|Revs]}
+            end, {null, null, []}, Result)
+    end.
 
 serialize_doc(_Db, Doc) ->
     couch_log:info("~n> serialize_doc(~p)~n", [Doc]),
@@ -408,19 +439,37 @@ write_doc_infos(#sqldb{db = Db} = State, Pairs, LocalDocs) ->
     end, LocalDocs),
     NewState = maybe_update_epochs(State),
     {ok, NewState}.
-purge_docs(#sqldb{db = Db}=State, _Pairs, PurgeInfos) ->
+purge_docs(#sqldb{db = Db}=State, Pairs, PurgeInfos) ->
     couch_log:info("~n> purge_docs(PurgeInfos: ~p)~n", [PurgeInfos]),
+    lists:foreach(fun
+        ({not_found, not_found}) ->
+            ok;
+        ({OldFDI, not_found}) ->
+            SQL = "DELETE FROM documents WHERE id=?1",
+            {ok, Update} = esqlite3:prepare(SQL, Db),
+            ok = esqlite3:bind(Update, [OldFDI#full_doc_info.id]),
+            '$done' = esqlite3:step(Update);
+        ({OldFDI, NewFDI}) ->
+            RevTreeBin = term_to_binary(NewFDI#full_doc_info.rev_tree),
+            RevTreeList = base64:encode(?b2l(RevTreeBin)),
+            couch_log:info("~n> RevTreeList: ~p~n", [RevTreeList]),
+            SQL = "UPDATE documents SET revtree=?1 WHERE id=?2 AND latest=1",
+            {ok, Update} = esqlite3:prepare(SQL, Db),
+            ok = esqlite3:bind(Update, [RevTreeList, NewFDI#full_doc_info.id]),
+            '$done' = esqlite3:step(Update)
+    end, Pairs),
     lists:foreach(fun (PurgeInfo) -> write_purge_info(Db, PurgeInfo) end, PurgeInfos),
     {ok, State}.
 
 write_purge_info(Db, {PurgeSeq, UUID, DocId, Revs}) ->
     lists:foreach(fun (Rev) -> write_purge_info(Db, PurgeSeq, UUID, DocId, Rev) end, Revs).
 
-write_purge_info(Db, PurgeSeq, UUID, DocId, Rev) ->
+write_purge_info(Db, PurgeSeq, UUID, DocId, {Start, Rev}) ->
     SQL = "INSERT INTO purges (purge_seq, uuid, docid, rev) VALUES (?1, ?2, ?3, ?4)",
-    Insert = esqlite3:prepare(SQL, Db),
-    ok = esqlite3:bind(Insert, [PurgeSeq, UUID, DocId, Rev]),
-    ok = esqlite3:step(Insert),
+    {ok, Insert} = esqlite3:prepare(SQL, Db),
+    [{_, JsonRev}] = couch_doc:to_json_rev(Start, [Rev]),
+    ok = esqlite3:bind(Insert, [PurgeSeq, UUID, DocId, JsonRev]),
+    '$done' = esqlite3:step(Insert),
     ok.
 
 commit_data(State) ->
