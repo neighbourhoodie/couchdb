@@ -79,6 +79,7 @@
 %   The VACUUM command may change the ROWIDs of entries in any tables that do not have an explicit INTEGER PRIMARY KEY.
 %   https://sqlite.org/lang_vacuum.html
 % strip out _id and _rev from doc body
+% compaction: prune rev trees
 
 
 exists(FilePath) ->
@@ -478,13 +479,13 @@ commit_data(State) ->
 
 open_write_stream(_Db, Options) ->
     couch_log:info("~n> open_write_stream(Options)~n", [Options]),
-    ok.
+    throw(not_supported).
 open_read_stream(_Db, _Stream) ->
     couch_log:info("~n> open_read_stream()~n", []),
-    ok.
+    throw(not_supported).
 is_active_stream(_Db, _Stream) ->
     couch_log:info("~n> is_active_stream()~n", []),
-    ok.
+    false.
 
 % This function is called to fold over the documents in
 % the database sorted by the raw byte collation order of
