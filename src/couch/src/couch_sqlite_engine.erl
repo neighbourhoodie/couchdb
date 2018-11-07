@@ -543,8 +543,8 @@ fold_docs_int(Db, UserFun, UserAcc, Options, Type) ->
                     update_seq = RowId,
                     sizes = #size_info{}
                 }
-            end,
-        couch_log:info("~n> UserFun()~p~n", [UserFun]),
+        end,
+
         case Type of
             changes -> 
                 case UserFun(couch_doc:to_doc_info(FDI), Acc) of
@@ -567,9 +567,24 @@ fold_changes(#sqldb{db = Db}, SinceSeq, UserFun, UserAcc, Options0) ->
     Options = [{stert_key, SinceSeq} | Options0],
     couch_log:info("~n> fold_changes(~p)~n", [Options]),
     fold_docs_int(Db, UserFun, UserAcc, Options, changes).
-fold_purge_infos(_Db, _StartSeq, _UserFun, _UserAcc, Options) ->
-    couch_log:info("~n> fold_purge_infos(~p)~n", [Options]),
-    ok.
+
+fold_purge_infos(#sqldb{db = Db}, StartSeq, UserFun, UserAcc, Options) ->
+    couch_log:info("~n> fold_purge_infos(SinceSeq: ~p, Options: ~p)~n", [StartSeq, Options]),
+    SQL = "SELECT purge_seq, uuid, docid, rev FROM purges WHERE purge_seq > ?1 ORDER BY purge_seq ORDER BY purge_seq",
+    Result = esqlite3:q(SQL, [StartSeq], Db),
+    FinalUserAcc = lists:foldl(fun({PurgeSeq, UUID, DocId, Rev}, {LastDocId, LastRevs, LastUserAcc}) ->
+        Revs = [Rev|LastRevs],
+        case LastDocId of
+            null -> {DocId, Revs, LastUserAcc}; % start
+            DocId -> {DocId, Revs, LastUserAcc}; % keep collecting
+            _NewDocId -> % done, construct purge_info
+                PurgeInfo = {PurgeSeq, UUID, DocId, Revs},
+                {_Continue, NewUserAcc} = UserFun(PurgeInfo, LastUserAcc),
+                {null, [], NewUserAcc}
+        end
+    end, {null, [], UserAcc}, Result),
+    {ok, FinalUserAcc}.
+
 count_changes_since(#sqldb{db = Db}, SinceSeq) ->
     couch_log:info("~n> count_changes_since(~p)~n", [SinceSeq]),
     get_update_seq(Db) - SinceSeq.
