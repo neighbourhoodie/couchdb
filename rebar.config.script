@@ -94,6 +94,7 @@ end,
 AddConfig = [
     {require_otp_vsn, "17|18|19|20|21"},
     {deps_dir, "src"},
+    {deps, lists:map(MakeDep, DepDescs)},
     {sub_dirs, SubDirs},
     {lib_dirs, ["src"]},
     {erl_opts, [{i, "../"} | ErlOpts]},
