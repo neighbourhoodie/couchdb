@@ -182,8 +182,8 @@ cpse_delete_doc(Db1) ->
     ?assertEqual(0, couch_db_engine:get_update_seq(Db1)),
 
     Actions = [
-        {create, {<<"foo">>, {[{<<"vsn">>, 1}]}}},
-        {delete, {<<"foo">>, {[]}}}
+        {create, {<<"foodelme">>, {[{<<"vsn">>, 1}]}}},
+        {delete, {<<"foodelme">>, {[]}}}
     ],
     {ok, Db2} = cpse_util:apply_actions(Db1, Actions),
     {ok, _} = couch_db:ensure_full_commit(Db2),
@@ -203,7 +203,7 @@ cpse_delete_doc(Db1) ->
     } = cpse_util:prev_rev(FDI),
 
     Doc0 = #doc{
-        id = <<"foo">>,
+        id = <<"foodelme">>,
         revs = {RevPos, [PrevRevId]},
         deleted = Deleted,
         body = DocPtr

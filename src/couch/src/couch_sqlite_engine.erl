@@ -73,6 +73,14 @@
 }).
 
 -define(DISK_VERSION, 1).
+-define(ADMIN_ONLY_SEC_PROPS, {[
+    {<<"members">>, {[
+        {<<"roles">>, [<<"_admin">>]}
+    ]}},
+    {<<"admins">>, {[
+        {<<"roles">>, [<<"_admin">>]}
+    ]}}
+]}).
 
 % TODO:
 % dont rely on rowid for changes, as vacuum might reorder things:
@@ -91,6 +99,7 @@ delete_compaction_files(_RootDir, _FilePath, _DelOpts) -> ok.
 init(FilePath, _Options) ->
     couch_log:info("~n> init(FilePath: ~p)~n", [FilePath]),
     {ok, Db} = esqlite3:open(FilePath),
+    ok = esqlite3:exec("PRAGMA journal_mode=WAL;", Db),
     Meta = "CREATE TABLE IF NOT EXISTS meta ("
         ++ "key TEXT, value TEXT, UNIQUE(key))",
     Epochs = "CREATE TABLE IF NOT EXISTS epochs (node TEXT, seq INT, UNIQUE(node, seq))",
@@ -111,7 +120,7 @@ init(FilePath, _Options) ->
     DocumentsIndexes = [
         "CREATE INDEX IF NOT EXISTS id ON documents (id)",
         "CREATE INDEX IF NOT EXISTS idrev ON documents (id, rev)",
-        "CREATE INDEX IF NOT EXISTS seq ON documents (seq)",
+        % "CREATE INDEX IF NOT EXISTS seq ON documents (seq)",
         "CREATE INDEX IF NOT EXISTS deleted ON documents (deleted)",
         "CREATE INDEX IF NOT EXISTS latest ON documents (latest)",
         "CREATE INDEX IF NOT EXISTS latest ON documents (local)",
@@ -122,7 +131,7 @@ init(FilePath, _Options) ->
     ok = esqlite3:exec(Purges, Db),
     ok = esqlite3:exec(Documents, Db),
     lists:foreach(fun (IdxDef) ->
-        esqlite3:exec(IdxDef, Db)
+        ok = esqlite3:exec(IdxDef, Db)
     end, DocumentsIndexes ++ PurgeIndexes),
     % TODO Purges = "CREATE TABLE purges IF NOT EXISTS",
     % TODO Attachments = "CREATE TABLE attachments ()"
@@ -134,6 +143,7 @@ init(FilePath, _Options) ->
     {ok, State}.
 
 init_state(Db) ->
+    ok = init_security(Db),
     {UpateEpochs, Epochs} = init_epochs(Db),
     #sqldb {
        db = Db,
@@ -141,6 +151,21 @@ init_state(Db) ->
        epochs = Epochs,
        last_activity = os:timestamp()
     }.
+
+init_security(Db) ->
+    couch_log:info("~n> init_security() ~n", []),
+    case load_meta(security, undefined, Db) of
+        undefined -> % only init once
+            couch_log:info("~n> DO INIT~n", []),
+            Config = config:get("couchdb", "default_security", "admin_local"),
+            DefaultSecurity = case Config of
+                "admin_only" -> ?ADMIN_ONLY_SEC_PROPS;
+                _Else -> {[]}
+            end,
+            write_meta(security, couch_util:json_encode(DefaultSecurity), Db);
+        _Else ->
+            ok
+    end.
 
 init_epochs(Db) ->
     SQL = "SELECT node, seq FROM epochs ORDER BY seq DESC;",
@@ -178,8 +203,12 @@ terminate(Reason, #sqldb{db = Db}) ->
     couch_log:info("~n> terminate(Reason: ~p)~n", [Reason]),
     ok = esqlite3:close(Db).
     
-handle_db_updater_call(_Msg, State) -> {reply, ok, State}.
-handle_db_updater_info(_Msg, State) -> {noreply, State}.
+handle_db_updater_call(Msg, State) ->
+    couch_log:info("~n> handle_db_updater_call(~p) ~n", [Msg]),
+    {reply, ok, State}.
+handle_db_updater_info(Msg, State) ->
+    couch_log:info("~n> handle_db_updater_info(~p) ~n", [Msg]),
+    {noreply, State}.
 
 incref(State) -> {ok, State}.
 decref(_Db) -> ok.
@@ -194,25 +223,30 @@ load_meta(Key, Default, Db) when is_atom(Key) ->
     load_meta(atom_to_list(Key), Default, Db);
 load_meta(Key, Default, Db) when is_list(Key) ->
     SQL = "SELECT value FROM meta WHERE key = ?1",
-    case esqlite3:q(SQL, [Key], Db) of
+    R = esqlite3:q(SQL, [Key], Db),
+    couch_log:info("~n> load_meta(~p) R: ~p ~n", [Key, R]),
+    case R of
         [] -> Default;
         [{Value}] -> Value
     end;
 load_meta(_Key, _Default, _Db) ->
-    throw({error, sqlite_engine_invalid_meta_key}).
+    throw({error, sqlite_engine_invalid_meta_load_key}).
 
 write_meta(Key, Value, Db) when is_atom(Key) ->
     write_meta(atom_to_list(Key), Value, Db);
-write_meta(Key, Value, Db) ->
-    SQL = "INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = '?2' WHERE key = '?1'",
+write_meta(Key, Value, Db) when is_list(Key) ->
+    couch_log:info("~n> write_meta(~p, ~p) ~n", [Key, Value]),
+    SQL = "INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2 WHERE key = ?1",
     {ok, Insert} = esqlite3:prepare(SQL, Db),
     ok = esqlite3:bind(Insert, [Key, Value]),
     '$done' = esqlite3:step(Insert),
-    ok.
+    ok;
+write_meta(_Key, _Value, _Db) ->
+    throw({error, sqlite_engine_invalid_meta_write_key}).
 
 get_compacted_seq(#sqldb{db = Db}) ->
     couch_log:info("~n> get_compacted_seq()~n", []),
-    load_meta(compacted_seq, Db).
+    load_meta(compacted_seq, 0, Db).
 
 get_del_doc_count(#sqldb{db = Db}) ->
     couch_log:info("~n> get_del_doc_count()~n", []),
@@ -241,6 +275,7 @@ get_epochs(#sqldb{db = Db}) ->
     SQL = "SELECT MAX(rowid) FROM documents WHERE latest=1 AND deleted=0",
     case esqlite3:q(SQL, Db) of
         [] -> 0;
+        [{undefined}] -> [{node(), 0}];
         [{MaxRowId}] ->
             couch_log:info("~n< get_epochs() -> ~p~n", [MaxRowId]),
             [{node(), MaxRowId}]
@@ -271,10 +306,15 @@ get_purge_infos_limit(#sqldb{db = Db}) ->
     load_meta(purge_infos_limit, 1000, Db).
 get_revs_limit(#sqldb{db = Db}) ->
     couch_log:info("~n> get_revs_limit()~n", []),
-    load_meta(revs_limit, 1000, Db).
+    binary_to_integer(load_meta(revs_limit, <<"1000">>, Db)).
+
 get_security(#sqldb{db = Db}) ->
     couch_log:info("~n> get_security()~n", []),
-    load_meta(security, [], Db).
+    Value = load_meta(security, {[]}, Db),
+    couch_log:info("~n> VValue: ~p~n", [Value]),
+    {JSONValue} = couch_util:json_decode(Value),
+    couch_log:info("~n> JSONVValue: ~p~n", [JSONValue]),
+    JSONValue.
 get_size_info(#sqldb{db = _Db}) ->
     couch_log:info("~n> get_size_info()~n", []),
     [
@@ -303,23 +343,35 @@ get_uuid(#sqldb{db = Db}) ->
 set_revs_limit(#sqldb{db = Db} = State, Value) ->
     ok = write_meta(revs_limit, Value, Db),
     {ok, State}.
+
 set_purge_infos_limit(#sqldb{db = Db} = State, Value) ->
     ok = write_meta(purge_infos_limit, Value, Db),
     {ok, State}.
 set_security(#sqldb{db = Db} = State, Value) ->
-    ok = write_meta(security, Value, Db),
+    couch_log:info("~n> set_security(Value: ~p)~n", [Value]),
+    JSONValue = couch_util:json_encode({Value}),
+    ok = write_meta(security, ?b2l(JSONValue), Db),
     {ok, State}.
+
+make_qs(N) ->
+    Qs = make_qs(N, []),
+    lists:flatten(lists:join(",", Qs)).
+    
+make_qs(0, Qs) -> Qs;
+make_qs(N, Qs) ->
+    make_qs(N - 1, ["?"|Qs]).
 
 open_docs(#sqldb{db = Db}, DocIds) ->
     couch_log:info("~n> open_docs(~p)~n", [DocIds]),
-    JoinedDocIds = lists:join(",", DocIds),
-    SQL = "SELECT id, rowid, revtree FROM documents WHERE id IN (?) AND latest=1",
-    couch_log:info("~n~nSQL: ~p, ~p", [SQL, DocIds]),
+    JoinedDocIds = lists:map(fun binary_to_list/1, DocIds),
+    Qs = make_qs(length(DocIds)),
+    SQL = "SELECT id, rowid, revtree FROM documents WHERE id IN (" ++ Qs++ ") AND latest=1",
+    couch_log:info("~n~nSQL: ~p, ~p,", [SQL, JoinedDocIds]),
 
-    Result = esqlite3:q(SQL, [JoinedDocIds], Db),
+    Result = esqlite3:q(SQL, JoinedDocIds, Db),
     couch_log:info("~n~nResult: ~p", [Result]),
     
-    lists:map(fun(DocId) ->
+    R = lists:map(fun(DocId) ->
         couch_log:info("~n~nDocId: ~p", [DocId]),
         case lists:keyfind(DocId, 1, Result) of
             false -> not_found;
@@ -336,7 +388,9 @@ open_docs(#sqldb{db = Db}, DocIds) ->
                     sizes = #size_info{}
                 }
         end
-    end, DocIds).
+    end, DocIds),
+    couch_log:info("~n> open_docs R: ~p~n", [R]),
+    R.
 
 open_local_docs(#sqldb{db = Db}, DocIds) ->
     couch_log:info("~n> open_local_docs(~p)~n", [DocIds]),
@@ -363,14 +417,24 @@ open_local_docs(#sqldb{db = Db}, DocIds) ->
         end
     end, DocIds).
 
-read_doc_body(#sqldb{db = Db}, Doc) ->
+read_doc_body(#sqldb{db = Db}, #doc{id = Id, revs = {Start, RevIds}} = Doc) ->
     couch_log:info("~n> read_doc_body(~p)~n", [Doc]),
-    SQL = "SELECT body FROM documents WHERE id=?1",
-    Result = case esqlite3:q(SQL, [Doc#doc.id], Db) of
-        [] -> not_found;
-        [{Body}] -> Body
+    [{_, JsonRev}] = couch_doc:to_json_rev(Start, RevIds),
+    SQL = "SELECT body, deleted FROM documents WHERE id=?1 AND rev=?2",
+    SQLResult = esqlite3:q(SQL, [Id, JsonRev], Db),
+    couch_log:info("~n> SQL: ~p, SQLResult: ~p~n", [SQL, SQLResult]),
+    {Deleted, Result} = case SQLResult of
+        [] -> {false, not_found};
+        [{Body, Deleted0}] -> {Body, Deleted0}
     end,
-    Doc#doc{body = couch_util:json_decode(Result)}.
+    {BodyList} = couch_util:json_decode(Result),
+    FilterIdAndRev = fun({Key, _Value}) -> Key =:= <<"_id">> orelse Key =:= <<"_rev">> end,
+    BodyTerm = {lists:dropwhile(FilterIdAndRev, BodyList)},
+    DeletedBool = case Deleted of
+        1 -> true;
+        _Zero -> false
+    end,
+    Doc#doc{body = BodyTerm, deleted = DeletedBool}.
 load_purge_infos(#sqldb{db = Db}, UUIDs) ->
     couch_log:info("~n> load_purge_infos(~p)~n", [UUIDs]),
     lists:map(fun (UUID) -> load_purge_info(Db, UUID) end, UUIDs).
@@ -421,9 +485,13 @@ write_doc_infos(#sqldb{db = Db} = State, Pairs, LocalDocs) ->
         RevTreeBin = term_to_binary(NewFDI#full_doc_info.rev_tree),
         RevTreeList = base64:encode(?b2l(RevTreeBin)),
         couch_log:info("~n> RevTreeList: ~p~n", [RevTreeList]),
-        SQL = "UPDATE documents SET revtree=?1 WHERE id=?2 AND latest=1",
+        Deleted = case NewFDI#full_doc_info.deleted of
+            true -> 1;
+            _False -> 0
+        end,
+        SQL = "UPDATE documents SET revtree=?1, deleted=?2 WHERE id=?3 AND latest=1",
         {ok, Update} = esqlite3:prepare(SQL, Db),
-        ok = esqlite3:bind(Update, [RevTreeList, NewFDI#full_doc_info.id]),
+        ok = esqlite3:bind(Update, [RevTreeList, Deleted, NewFDI#full_doc_info.id]),
         '$done' = esqlite3:step(Update)
     end, Pairs),
 
@@ -440,6 +508,7 @@ write_doc_infos(#sqldb{db = Db} = State, Pairs, LocalDocs) ->
     end, LocalDocs),
     NewState = maybe_update_epochs(State),
     {ok, NewState}.
+
 purge_docs(#sqldb{db = Db}=State, Pairs, PurgeInfos) ->
     couch_log:info("~n> purge_docs(PurgeInfos: ~p)~n", [PurgeInfos]),
     lists:foreach(fun
