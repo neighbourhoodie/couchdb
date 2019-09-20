@@ -17,4 +17,6 @@
 
 
 couch_sqlite_engine_test_()->
-    cpse_util:create_tests(couch, couch_sqlite_engine, "couch").
+    % {ok, Db} = esqlite3:open("/tmp/foo.couchsql"),
+    % Db.
+    cpse_util:create_tests(couch, couch_sqlite_engine, "sqlite").

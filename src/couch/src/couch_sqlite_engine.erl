@@ -361,6 +361,7 @@ make_qs(0, Qs) -> Qs;
 make_qs(N, Qs) ->
     make_qs(N - 1, ["?"|Qs]).
 
+open_docs(#sqldb{}, []) -> [];
 open_docs(#sqldb{db = Db}, DocIds) ->
     couch_log:info("~n> open_docs(~p)~n", [DocIds]),
     JoinedDocIds = lists:map(fun binary_to_list/1, DocIds),
@@ -372,7 +373,7 @@ open_docs(#sqldb{db = Db}, DocIds) ->
     couch_log:info("~n~nResult: ~p", [Result]),
     
     R = lists:map(fun(DocId) ->
-        couch_log:info("~n~nDocId: ~p", [DocId]),
+        % couch_log:info("~n~nDocId: ~p", [DocId]),
         case lists:keyfind(DocId, 1, Result) of
             false -> not_found;
             {DocId, RowId, RevTree0} ->
@@ -425,7 +426,7 @@ read_doc_body(#sqldb{db = Db}, #doc{id = Id, revs = {Start, RevIds}} = Doc) ->
     couch_log:info("~n> SQL: ~p, SQLResult: ~p~n", [SQL, SQLResult]),
     {Deleted, Result} = case SQLResult of
         [] -> {false, not_found};
-        [{Body, Deleted0}] -> {Body, Deleted0}
+        [{Body, Deleted0}] -> {Deleted0, Body}
     end,
     {BodyList} = couch_util:json_decode(Result),
     FilterIdAndRev = fun({Key, _Value}) -> Key =:= <<"_id">> orelse Key =:= <<"_rev">> end,
@@ -502,6 +503,7 @@ write_doc_infos(#sqldb{db = Db} = State, Pairs, LocalDocs) ->
         JsonDoc = couch_util:json_encode(couch_doc:to_json_obj(LocalDoc, [])),
         couch_log:info("~n> JsonDoc: ~p~n", [JsonDoc]),
         SQL = "INSERT INTO documents (id, rev, body, local, latest, deleted) VALUES (?1, ?2, ?3, 1, 1, 0)",
+        couch_log:info("~n> SQL: ~p~n", [SQL]),
         {ok, Upsert} = esqlite3:prepare(SQL, Db),
         ok = esqlite3:bind(Upsert, [Id, JsonRevs, JsonDoc]),
         '$done' = esqlite3:step(Upsert)
@@ -590,8 +592,8 @@ fold_docs_int(Db, UserFun, UserAcc, Options, Type) ->
     SQL1 = SQL0 ++ LocalSQL ++ AdditionalWhere,
     Order = options_to_order_sql(Options, Type),
     SQL = SQL1 ++ Order,
-    couch_log:info("~n> fold_docs() SQL: ~p~n", [SQL]),
     Result = esqlite3:q(SQL, Db),
+    couch_log:info("~n> fold_docs() SQL: ~p~n Result: ~p~n", [SQL, Result]),
     FinalNewUserAcc = lists:foldl(fun({Id, RowId, RevTree0, Rev}, Acc) ->
         RevTree = case RevTree0 of
             undefined -> [];
@@ -621,15 +623,27 @@ fold_docs_int(Db, UserFun, UserAcc, Options, Type) ->
                     {stop, LastUserAcc} -> LastUserAcc % TODO: actually stop
                 end;
             _Other ->
-                case UserFun(FDI, {[], []}, Acc) of
-                    {ok, NewUserAcc} -> NewUserAcc;
-                    {stop, LastUserAcc} -> LastUserAcc % TODO: actually stop
+                case lists:member(include_reductions, Options) of
+                    true ->
+                        couch_log:info("~n> fold_docs() call user fun, include reductions~n", []),
+                        case UserFun(FDI, length(Acc), Acc) of
+                        % case UserFun(FDI, {[], []}, Acc) of % stolen from the in-mem db, might be out of date
+                            {ok, NewUserAcc} -> NewUserAcc;
+                            {stop, LastUserAcc} -> LastUserAcc % TODO: actually stop
+                        end;
+                    false ->
+                        couch_log:info("~n> fold_docs() call user fun~n", []),
+                        case UserFun(FDI, Acc) of
+                        % case UserFun(FDI, {[], []}, Acc) of % stolen from the in-mem db, might be out of date
+                            {ok, NewUserAcc} -> NewUserAcc;
+                            {stop, LastUserAcc} -> LastUserAcc % TODO: actually stop
+                        end
                 end
         end
     end, UserAcc, Result),
     case lists:member(include_reductions, Options) of
-        true -> {ok, 0, FinalNewUserAcc};
-        _False -> {ok, FinalNewUserAcc}
+        true -> couch_log:info("~n> fold_docs() return value, include reductions~n", []), {ok, length(Result), FinalNewUserAcc};
+        _False -> couch_log:info("~n> fold_docs() return value~n", []), {ok, FinalNewUserAcc}
     end.
 
 fold_changes(#sqldb{db = Db}, SinceSeq, UserFun, UserAcc, Options0) ->
@@ -647,7 +661,7 @@ fold_purge_infos(#sqldb{db = Db}, StartSeq, UserFun, UserAcc, Options) ->
             null -> {DocId, Revs, LastUserAcc}; % start
             DocId -> {DocId, Revs, LastUserAcc}; % keep collecting
             _NewDocId -> % done, construct purge_info
-                PurgeInfo = {PurgeSeq, UUID, DocId, Revs},
+                PurgeInfo = {PurgeSeq, UUID, dOCiD, Revs},
                 {_Continue, NewUserAcc} = UserFun(PurgeInfo, LastUserAcc),
                 {null, [], NewUserAcc}
         end
@@ -678,20 +692,22 @@ finish_compaction(#sqldb{db = Db} = State, DbName, Options, _CompactFilePath) ->
 
 % Utilities
 % [include_reductions,{dir,fwd},{start_key,<<"asd">>},{end_key,<<"?">>},{finalizer,null},{namespace,undefined}]
+options_to_sql([], _Type) -> "";
+options_to_sql([{dir,_}], _Type) -> ""; % shortcut, maybe better parse options into easier to build-from structure
 options_to_sql(Options, Type) ->
-    StartKey = proplists:get_value(start_key, Options, <<"0">>),
-    EndKey = proplists:get_value(end_key, Options, <<"">>),
+    StartKey = proplists:get_value(start_key, Options, <<"0">>), % TODO: find true minimum
+    EndKey = proplists:get_value(end_key, Options, <<"ZZZZZZZZZZZZZZ">>), % TODO: find true max
     Dir = proplists:get_value(dir, Options, fwd),
     case Type of
         changes ->
             " AND rowid >= " ++ ?b2l(StartKey) ++ " AND rowid <= '" ++ ?b2l(EndKey) ++ "'";
         _Else ->
-            case Dir of
-                fwd ->
-                    " AND id >= '" ++ ?b2l(StartKey) ++ "' AND id <= '" ++ ?b2l(EndKey) ++ "'";
-                _Rev ->
-                    " AND id >= '" ++ ?b2l(EndKey) ++ "' AND id <= '" ++ ?b2l(StartKey) ++ "'"
-            end
+            % case Dir of
+            %     fwd ->
+            " AND id >= '" ++ ?b2l(StartKey) ++ "' AND id <= '" ++ ?b2l(EndKey) ++ "'"
+            %     _Rev ->
+            %         " AND id >= '" ++ ?b2l(EndKey) ++ "' AND id <= '" ++ ?b2l(StartKey) ++ "'"
+            % end
     end.
 
 options_to_order_sql(Options, Type) ->
