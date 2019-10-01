@@ -540,6 +540,7 @@ write_purge_info(Db, PurgeSeq, UUID, DocId, {Start, Rev}) ->
     SQL = "INSERT INTO purges (purge_seq, uuid, docid, rev) VALUES (?1, ?2, ?3, ?4)",
     {ok, Insert} = esqlite3:prepare(SQL, Db),
     [{_, JsonRev}] = couch_doc:to_json_rev(Start, [Rev]),
+    couch_log:info("~n> write_purge_info(): SQL ~p PurgeSeq: ~p, UUID: ~p, DocId: ~p, JsonRev: ~p~n", [SQL, PurgeSeq, UUID, DocId, JsonRev]),
     ok = esqlite3:bind(Insert, [PurgeSeq, UUID, DocId, JsonRev]),
     '$done' = esqlite3:step(Insert),
     ok.
@@ -602,6 +603,7 @@ fold_docs_int(Db, UserFun, UserAcc, Options, Type) ->
         lists:foldl(fun({Id, RowId, RevTree0, Rev}, Acc) ->
             RevTree = case RevTree0 of
                 undefined -> [];
+                % TODO: hackety hack: split out into separate docs
                 _Else -> binary_to_term(base64:decode(RevTree0))
             end,
             FDI = case Type of
@@ -664,23 +666,39 @@ fold_changes(#sqldb{db = Db}, SinceSeq, UserFun, UserAcc, Options0) ->
     couch_log:info("~n> fold_changes(~p)~n", [Options]),
     fold_docs_int(Db, UserFun, UserAcc, Options, changes).
 
+rev_to_binary(JSONRev) -> couch_doc:parse_rev(JSONRev).
+    
 fold_purge_infos(#sqldb{db = Db}, StartSeq, UserFun, UserAcc, Options) ->
+    Dir = case proplists:get_value(dir, Options, fwd) of
+        rev -> " DESC";
+        _ -> ""
+    end,
     couch_log:info("~n> fold_purge_infos(SinceSeq: ~p, Options: ~p)~n", [StartSeq, Options]),
-    SQL = "SELECT purge_seq, uuid, docid, rev FROM purges WHERE purge_seq > ?1 ORDER BY purge_seq",
+    SQL = "SELECT purge_seq, uuid, docid, rev FROM purges WHERE purge_seq > ?1 ORDER BY purge_seq" ++ Dir,
     couch_log:info("~n> fold_purge_infos() SQL: ~p ~n", [SQL]),
     Result = esqlite3:q(SQL, [StartSeq], Db),
-    {_, _, FinalUserAcc} = lists:foldl(fun({PurgeSeq, UUID, DocId, Rev}, {LastDocId, LastRevs, LastUserAcc}) ->
-        Revs = [Rev|LastRevs],
-        case LastDocId of
-            null -> {DocId, Revs, LastUserAcc}; % start
-            DocId -> {DocId, Revs, LastUserAcc}; % keep collecting
-            _NewDocId -> % done, construct purge_info
-                PurgeInfo = {PurgeSeq, UUID, DocId, Revs},
-                {_Continue, NewUserAcc} = UserFun(PurgeInfo, LastUserAcc),
-                {null, [], NewUserAcc}
-        end
-    end, {null, [], UserAcc}, Result),
-    {ok, FinalUserAcc}.
+    couch_log:info("~n> fold_purge_infos() Result: ~p ~n", [Result]),
+    GroupedPurgeInfos = lists:foldl(fun
+        ({PurgeSeq, UUID, DocId, Rev}, []) -> [{PurgeSeq, UUID, DocId, [rev_to_binary(Rev)]}];
+        ({PurgeSeq, UUID, DocId, Rev}, [{LastPurgeSeq, LastUUID, LastDocId, LastRevs}=LastPurgeInfo | RestAcc]) ->
+            case LastPurgeSeq of
+                PurgeSeq -> [{LastPurgeSeq, LastUUID, LastDocId, [rev_to_binary(Rev) | LastRevs]} | RestAcc]; % keep collecting
+                _ -> [{PurgeSeq, UUID, DocId, [rev_to_binary(Rev)]}] ++ [LastPurgeInfo] ++ RestAcc % start collecting revs for this docId
+            end
+    end, [], Result),
+    couch_log:info("~n> fold_purge_infos() GroupedPurgeInfos: ~p ~n", [GroupedPurgeInfos]),
+    FinalResult = try 
+        lists:foldl(fun(PurgeInfo, UserAcc) ->
+            case UserFun(PurgeInfo, UserAcc) of
+                {ok, NewUserAcc} -> NewUserAcc;
+                {stop, NewUserAcc} -> throw({stop, NewUserAcc})
+            end
+        end, UserAcc, GroupedPurgeInfos)
+    catch
+        throw:{stop, LastUserAcc} -> LastUserAcc
+    end,
+    couch_log:info("~n> fold_purge_infos() FinalResult: ~p ~n", [FinalResult]),
+    {ok, lists:reverse(FinalResult)}.
 
 count_changes_since(#sqldb{db = Db}, SinceSeq) ->
     couch_log:info("~n> count_changes_since(~p)~n", [SinceSeq]),
