@@ -36,7 +36,6 @@ cpse_fold_all(DbName) ->
 cpse_fold_all_local(DbName) ->
     fold_all(DbName, fold_local_docs, fun local_docid/1).
 
-
 cpse_fold_start_key(DbName) ->
     fold_start_key(DbName, fold_docs, fun docid/1).
 
@@ -92,7 +91,7 @@ cpse_fold_include_reductions(DbName) ->
 fold_all(DbName, FoldFun, DocIdFun) ->
     DocIds = [DocIdFun(I) || I <- lists:seq(1, ?NUM_DOCS)],
     {ok, Db} = init_db(DbName, DocIdFun),
-
+    
     {ok, DocIdAccFwd} = couch_db_engine:FoldFun(Db, fun fold_fun/2, [], []),
     ?assertEqual(?NUM_DOCS, length(DocIdAccFwd)),
     ?assertEqual(DocIds, lists:reverse(DocIdAccFwd)),
@@ -342,7 +341,6 @@ fold_user_fun_stop(DbName, FoldFun, DocIdFun) ->
 
     FiveDocIdsFwd = [DocIdFun(I)
             || I <- lists:seq(StartKeyNum, StartKeyNum + 5)],
-
     {ok, FiveDocIdAccFwd} = couch_db_engine:FoldFun(Db, fun fold_stop/2, [], [
             {start_key, StartKey}
         ]),

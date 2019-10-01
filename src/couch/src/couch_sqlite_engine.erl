@@ -588,80 +588,94 @@ fold_docs_int(Db, UserFun, UserAcc, Options, Type) ->
         local -> "AND local = 1 ";
         _Global -> "AND local != 1 "
     end,
-    AdditionalWhere = options_to_sql(Options, Type),
+    AdditionalWhere = case Type of
+        changes -> changes_options_to_sql(Options, Type);
+        _ -> options_to_sql(Options, Type)
+    end,
     SQL1 = SQL0 ++ LocalSQL ++ AdditionalWhere,
     Order = options_to_order_sql(Options, Type),
     SQL = SQL1 ++ Order,
+    couch_log:info("~n> fold_docs() SQL: ~p~n", [SQL]),
     Result = esqlite3:q(SQL, Db),
-    couch_log:info("~n> fold_docs() SQL: ~p~n Result: ~p~n", [SQL, Result]),
-    FinalNewUserAcc = lists:foldl(fun({Id, RowId, RevTree0, Rev}, Acc) ->
-        RevTree = case RevTree0 of
-            undefined -> [];
-            _Else -> binary_to_term(base64:decode(RevTree0))
-        end,
-        FDI = case Type of
-            local ->
-                [Pos, RevId] = string:split(?b2l(Rev), "-"),
-                #doc{
-                    id = Id,
-                    revs = {list_to_integer(Pos), [RevId]}
-                };
-            _Global1 ->
-                #full_doc_info{
-                    id = Id,
-                    rev_tree = RevTree,
-                    deleted = false,
-                    update_seq = RowId,
-                    sizes = #size_info{}
-                }
-        end,
+    couch_log:info("~n> fold_docs() Result: ~p~n", [Result]),
+    FinalNewUserAcc = try
+        lists:foldl(fun({Id, RowId, RevTree0, Rev}, Acc) ->
+            RevTree = case RevTree0 of
+                undefined -> [];
+                _Else -> binary_to_term(base64:decode(RevTree0))
+            end,
+            FDI = case Type of
+                local ->
+                    [Pos, RevId] = string:split(?b2l(Rev), "-"),
+                    #doc{
+                        id = Id,
+                        revs = {list_to_integer(Pos), [RevId]}
+                    };
+                _Global1 ->
+                    #full_doc_info{
+                        id = Id,
+                        rev_tree = RevTree,
+                        deleted = false,
+                        update_seq = RowId,
+                        sizes = #size_info{}
+                    }
+            end,
 
-        case Type of
-            changes -> 
-                case UserFun(couch_doc:to_doc_info(FDI), Acc) of
-                    {ok, NewUserAcc} -> NewUserAcc;
-                    {stop, LastUserAcc} -> LastUserAcc % TODO: actually stop
-                end;
-            _Other ->
-                case lists:member(include_reductions, Options) of
-                    true ->
-                        couch_log:info("~n> fold_docs() call user fun, include reductions~n", []),
-                        case UserFun(FDI, length(Acc), Acc) of
-                        % case UserFun(FDI, {[], []}, Acc) of % stolen from the in-mem db, might be out of date
-                            {ok, NewUserAcc} -> NewUserAcc;
-                            {stop, LastUserAcc} -> LastUserAcc % TODO: actually stop
-                        end;
-                    false ->
-                        couch_log:info("~n> fold_docs() call user fun~n", []),
-                        case UserFun(FDI, Acc) of
-                        % case UserFun(FDI, {[], []}, Acc) of % stolen from the in-mem db, might be out of date
-                            {ok, NewUserAcc} -> NewUserAcc;
-                            {stop, LastUserAcc} -> LastUserAcc % TODO: actually stop
-                        end
-                end
-        end
-    end, UserAcc, Result),
+            case Type of
+                changes -> 
+                    case UserFun(FDI, Acc) of
+                        {ok, NewUserAcc} -> NewUserAcc;
+                        {stop, LastUserAcc} -> throw({stop, LastUserAcc})
+                    end;
+                _Other ->
+                    case lists:member(include_reductions, Options) of
+                        true ->
+                            couch_log:info("~n> fold_docs() call user fun, include reductions: Acc~n", []),
+                            % make cpse tests happy which passes in a `nil` Acc.
+                            Reductions = case Acc of
+                                List when is_list(List) -> length(List);
+                                _ -> 0
+                            end,
+                            case UserFun(FDI, Reductions, Acc) of
+                            % case UserFun(FDI, {[], []}, Acc) of % stolen from the in-mem db, might be out of date
+                                {ok, NewUserAcc} -> NewUserAcc;
+                                {stop, LastUserAcc} -> throw({stop, LastUserAcc})
+                            end;
+                        false ->
+                            couch_log:info("~n> fold_docs() call user fun~n", []),
+                            case UserFun(FDI, Acc) of
+                            % case UserFun(FDI, {[], []}, Acc) of % stolen from the in-mem db, might be out of date
+                                {ok, NewUserAcc} -> NewUserAcc;
+                                {stop, LastUserAcc} -> throw({stop, LastUserAcc})
+                            end
+                    end
+            end
+        end, UserAcc, Result)
+    catch
+        throw:{stop, FinalAcc} -> FinalAcc
+    end,
     case lists:member(include_reductions, Options) of
         true -> couch_log:info("~n> fold_docs() return value, include reductions~n", []), {ok, length(Result), FinalNewUserAcc};
         _False -> couch_log:info("~n> fold_docs() return value~n", []), {ok, FinalNewUserAcc}
     end.
 
 fold_changes(#sqldb{db = Db}, SinceSeq, UserFun, UserAcc, Options0) ->
-    Options = [{stert_key, SinceSeq} | Options0],
+    Options = [{start_key, SinceSeq+1} | Options0],
     couch_log:info("~n> fold_changes(~p)~n", [Options]),
     fold_docs_int(Db, UserFun, UserAcc, Options, changes).
 
 fold_purge_infos(#sqldb{db = Db}, StartSeq, UserFun, UserAcc, Options) ->
     couch_log:info("~n> fold_purge_infos(SinceSeq: ~p, Options: ~p)~n", [StartSeq, Options]),
-    SQL = "SELECT purge_seq, uuid, docid, rev FROM purges WHERE purge_seq > ?1 ORDER BY purge_seq ORDER BY purge_seq",
+    SQL = "SELECT purge_seq, uuid, docid, rev FROM purges WHERE purge_seq > ?1 ORDER BY purge_seq",
+    couch_log:info("~n> fold_purge_infos() SQL: ~p ~n", [SQL]),
     Result = esqlite3:q(SQL, [StartSeq], Db),
-    FinalUserAcc = lists:foldl(fun({PurgeSeq, UUID, DocId, Rev}, {LastDocId, LastRevs, LastUserAcc}) ->
+    {_, _, FinalUserAcc} = lists:foldl(fun({PurgeSeq, UUID, DocId, Rev}, {LastDocId, LastRevs, LastUserAcc}) ->
         Revs = [Rev|LastRevs],
         case LastDocId of
             null -> {DocId, Revs, LastUserAcc}; % start
             DocId -> {DocId, Revs, LastUserAcc}; % keep collecting
             _NewDocId -> % done, construct purge_info
-                PurgeInfo = {PurgeSeq, UUID, dOCiD, Revs},
+                PurgeInfo = {PurgeSeq, UUID, DocId, Revs},
                 {_Continue, NewUserAcc} = UserFun(PurgeInfo, LastUserAcc),
                 {null, [], NewUserAcc}
         end
@@ -670,7 +684,10 @@ fold_purge_infos(#sqldb{db = Db}, StartSeq, UserFun, UserAcc, Options) ->
 
 count_changes_since(#sqldb{db = Db}, SinceSeq) ->
     couch_log:info("~n> count_changes_since(~p)~n", [SinceSeq]),
-    get_update_seq(Db) - SinceSeq.
+    SQL = "SELECT COUNT(*) FROM documents WHERE latest = 1",
+    [{ChangesSince}] = esqlite3:q(SQL, Db),
+    couch_log:info("~n> count_changes_since() -> ChangesSince: ~p~n", [ChangesSince]),
+    ChangesSince - SinceSeq.
 
 start_compaction(#sqldb{db = Db} = State, DbName, Options, Parent) ->
     couch_log:info("~n> start_compaction(DbName: ~p, Options: ~p)~n", [DbName, Options]),
@@ -690,24 +707,65 @@ finish_compaction(#sqldb{db = Db} = State, DbName, Options, _CompactFilePath) ->
     {ok, NewState, undefined}.
 
 
+-define(START_KEY_MIN, <<"">>).
+-define(END_KEY_MAX, <<255>>).
+
+% if dir !fwd reverse defaults
+get_start_key(fwd, Options) ->
+    proplists:get_value(start_key, Options, ?START_KEY_MIN);
+get_start_key(rev, Options) ->
+    proplists:get_value(start_key, Options, ?END_KEY_MAX).
+
+% if dir !fwd reverse defaults
+get_end_key(Dir, Options) ->
+    case proplists:get_value(end_key, Options, nil) of
+        nil -> get_end_key_gt(Dir, Options);
+        _ -> get_end_key1(Dir, Options)
+    end.
+get_end_key1(fwd, Options) ->
+    proplists:get_value(end_key, Options, ?END_KEY_MAX);
+get_end_key1(rev, Options) ->
+    proplists:get_value(end_key, Options, ?START_KEY_MIN).
+
+get_end_key_gt(fwd, Options) ->
+    proplists:get_value(end_key_gt, Options, ?END_KEY_MAX);
+get_end_key_gt(rev, Options) ->
+    proplists:get_value(end_key_gt, Options, ?START_KEY_MIN).
+
+end_key_gt_sql(fwd, true) -> "<";
+end_key_gt_sql(fwd, _False) -> "<=";
+end_key_gt_sql(rev, true) -> ">";
+end_key_gt_sql(rev, _False) -> ">=".
+
 % Utilities
 % [include_reductions,{dir,fwd},{start_key,<<"asd">>},{end_key,<<"?">>},{finalizer,null},{namespace,undefined}]
+changes_options_to_sql([], _Type) -> "";
+changes_options_to_sql(Options, _Type) ->
+    Dir = proplists:get_value(dir, Options, fwd),
+    Cmp = case Dir of
+        fwd -> ">=";
+        _ -> "<="
+    end,
+    Since = proplists:get_value(start_key, Options, 0),
+    " AND rowid " ++ Cmp ++ " " ++ integer_to_list(Since).
+
 options_to_sql([], _Type) -> "";
 options_to_sql([{dir,_}], _Type) -> ""; % shortcut, maybe better parse options into easier to build-from structure
 options_to_sql(Options, Type) ->
-    StartKey = proplists:get_value(start_key, Options, <<"0">>), % TODO: find true minimum
-    EndKey = proplists:get_value(end_key, Options, <<"ZZZZZZZZZZZZZZ">>), % TODO: find true max
     Dir = proplists:get_value(dir, Options, fwd),
+    StartKey = get_start_key(Dir, Options),
+    EndKey = get_end_key(Dir, Options),
+    HasEndKeyGt = proplists:lookup(end_key_gt, Options) /= none,
     case Type of
         changes ->
-            " AND rowid >= " ++ ?b2l(StartKey) ++ " AND rowid <= '" ++ ?b2l(EndKey) ++ "'";
+            " AND rowid >= '" ++ ?b2l(StartKey) ++ "'";
         _Else ->
-            % case Dir of
-            %     fwd ->
-            " AND id >= '" ++ ?b2l(StartKey) ++ "' AND id <= '" ++ ?b2l(EndKey) ++ "'"
-            %     _Rev ->
-            %         " AND id >= '" ++ ?b2l(EndKey) ++ "' AND id <= '" ++ ?b2l(StartKey) ++ "'"
-            % end
+            case Dir of
+                fwd ->
+                    " AND id >= '" ++ ?b2l(StartKey) ++ "' AND id " ++ end_key_gt_sql(Dir, HasEndKeyGt) ++ " '" ++ ?b2l(EndKey) ++ "'";
+                _Rev ->
+                    " AND id " ++ end_key_gt_sql(Dir, HasEndKeyGt) ++ " '" ++ ?b2l(EndKey) ++ "' AND id <= '" ++ ?b2l(StartKey) ++ "'"
+            end
     end.
 
 options_to_order_sql(Options, Type) ->

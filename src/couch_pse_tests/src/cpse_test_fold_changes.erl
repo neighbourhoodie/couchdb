@@ -18,7 +18,7 @@
 -include_lib("couch/include/couch_db.hrl").
 
 
--define(NUM_DOCS, 25).
+-define(NUM_DOCS, 5).
 
 
 setup_each() ->
