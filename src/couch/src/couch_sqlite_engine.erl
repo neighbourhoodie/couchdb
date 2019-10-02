@@ -83,17 +83,15 @@
 ]}).
 
 % TODO:
-% dont rely on rowid for changes, as vacuum might reorder things:
-%   The VACUUM command may change the ROWIDs of entries in any tables that do not have an explicit INTEGER PRIMARY KEY.
-%   https://sqlite.org/lang_vacuum.html
 % strip out _id and _rev from doc body
-% compaction: prune rev trees
+% compaction: prune rev trees, remove NULL docs and bump seq
 
 
 exists(FilePath) ->
     couch_log:info("~n> exists(FilePath: ~p)~n", [FilePath]),
     filelib:is_file(FilePath).
 delete(_RootDir, FilePath, _Async) -> file:delete(FilePath).
+% delete(_RootDir, FilePath, _Async) -> ok. % uncomment to debug sqlite file after test run
 delete_compaction_files(_RootDir, _FilePath, _DelOpts) -> ok.
 
 init(FilePath, _Options) ->
@@ -109,11 +107,13 @@ init(FilePath, _Options) ->
         "CREATE INDEX IF NOT EXISTS uuid ON purges (uuid)"
     ],
     Documents = "CREATE TABLE IF NOT EXISTS documents ("
+        ++ "seq INTEGER PRIMARY KEY AUTOINCREMENT, "
         ++ "id TEXT, "
         ++ "rev TEXT, "
         ++ "revtree TEXT, "
         ++ "deleted INT DEFAULT 0, "
         ++ "latest INT DEFAULT 1, "
+        ++ "purged INT DEFAULT 0, "
         ++ "local INT DEFAULT 0, "
         ++ "body BLOB, "
         ++ "UNIQUE(id, rev))",
@@ -123,8 +123,9 @@ init(FilePath, _Options) ->
         % "CREATE INDEX IF NOT EXISTS seq ON documents (seq)",
         "CREATE INDEX IF NOT EXISTS deleted ON documents (deleted)",
         "CREATE INDEX IF NOT EXISTS latest ON documents (latest)",
-        "CREATE INDEX IF NOT EXISTS latest ON documents (local)",
-        "CREATE INDEX IF NOT EXISTS latest ON documents (rowid)"
+        "CREATE INDEX IF NOT EXISTS latest ON documents (purged)",
+        "CREATE INDEX IF NOT EXISTS local ON documents (local)"%,
+        % "CREATE INDEX IF NOT EXISTS rowid ON documents (rowid)"
     ],
     ok = esqlite3:exec(Meta, Db),
     ok = esqlite3:exec(Epochs, Db),
@@ -227,7 +228,7 @@ load_meta(Key, Default, Db) when is_list(Key) ->
     couch_log:info("~n> load_meta(~p) R: ~p ~n", [Key, R]),
     case R of
         [] -> Default;
-        [{Value}] -> Value
+        [{Value}] -> parse_meta(Key, Value)
     end;
 load_meta(_Key, _Default, _Db) ->
     throw({error, sqlite_engine_invalid_meta_load_key}).
@@ -244,13 +245,16 @@ write_meta(Key, Value, Db) when is_list(Key) ->
 write_meta(_Key, _Value, _Db) ->
     throw({error, sqlite_engine_invalid_meta_write_key}).
 
+parse_meta("purge_infos_limit", Value) -> list_to_integer(binary_to_list(Value));
+parse_meta(_, Value) -> Value.
+
 get_compacted_seq(#sqldb{db = Db}) ->
     couch_log:info("~n> get_compacted_seq()~n", []),
     load_meta(compacted_seq, 0, Db).
 
 get_del_doc_count(#sqldb{db = Db}) ->
     couch_log:info("~n> get_del_doc_count()~n", []),
-    SQL = "SELECT COUNT(*) FROM documents WHERE latest=1 AND deleted=1",
+    SQL = "SELECT COUNT(*) FROM documents WHERE latest=1 AND deleted=1 AND purged = 0",
     case esqlite3:q(SQL, Db) of
         [] -> 0;
         [{DelDocCount}] ->
@@ -263,7 +267,7 @@ get_disk_version(_Db) ->
     ?DISK_VERSION.
 get_doc_count(#sqldb{db = Db}) ->
     couch_log:info("~n> get_doc_count()~n", []),
-    SQL = "SELECT COUNT(*) FROM documents WHERE latest=1 AND deleted=0",
+    SQL = "SELECT COUNT(*) FROM documents WHERE latest=1 AND deleted=0 AND local=0 AND purged=0",
     case esqlite3:q(SQL, Db) of
         [] -> 0;
         [{DocCount}] ->
@@ -272,7 +276,7 @@ get_doc_count(#sqldb{db = Db}) ->
     end.
 get_epochs(#sqldb{db = Db}) ->
     couch_log:info("~n> get_epochs()~n", []),
-    SQL = "SELECT MAX(rowid) FROM documents WHERE latest=1 AND deleted=0",
+    SQL = "SELECT MAX(seq) FROM documents WHERE latest=1 AND deleted=0",
     case esqlite3:q(SQL, Db) of
         [] -> 0;
         [{undefined}] -> [{node(), 0}];
@@ -303,7 +307,7 @@ get_oldest_purge_seq(#sqldb{db = Db}) ->
     end.
 get_purge_infos_limit(#sqldb{db = Db}) ->
     couch_log:info("~n> get_purge_infos_limit()~n", []),
-    load_meta(purge_infos_limit, 1000, Db).
+    load_meta(purge_infos_limit, 10, Db).
 get_revs_limit(#sqldb{db = Db}) ->
     couch_log:info("~n> get_revs_limit()~n", []),
     binary_to_integer(load_meta(revs_limit, <<"1000">>, Db)).
@@ -327,7 +331,7 @@ get_update_seq(#sqldb{db = Db}) ->
     get_update_seq(Db);
 get_update_seq(Db) ->
     couch_log:info("~n> get_update_seq(Db: ~p)~n", [Db]),
-    SQL = "SELECT rowid FROM documents ORDER BY rowid DESC LIMIT 1;",
+    SQL = "SELECT MAX(seq) FROM documents WHERE local=0;",
     case esqlite3:q(SQL, Db) of
         [] -> 0;
         [{undefined}] -> 0;
@@ -361,29 +365,43 @@ make_qs(0, Qs) -> Qs;
 make_qs(N, Qs) ->
     make_qs(N - 1, ["?"|Qs]).
 
+
+chunk_collect_query([], _, Acc) -> lists:reverse(lists:flatten(Acc)); % return it all
+chunk_collect_query(List, Fun, Acc) when length(List) >= 999 ->
+    {Chunk, Rest} = lists:split(999, List),
+    chunk_collect_query(Rest, Fun, [Fun(Chunk) | Acc]);
+chunk_collect_query(LastChunk, Fun, Acc) ->
+    chunk_collect_query([], Fun, [Fun(LastChunk) | Acc]).
+        
 open_docs(#sqldb{}, []) -> [];
 open_docs(#sqldb{db = Db}, DocIds) ->
     couch_log:info("~n> open_docs(~p)~n", [DocIds]),
-    JoinedDocIds = lists:map(fun binary_to_list/1, DocIds),
-    Qs = make_qs(length(DocIds)),
-    SQL = "SELECT id, rowid, revtree FROM documents WHERE id IN (" ++ Qs++ ") AND latest=1",
-    couch_log:info("~n~nSQL: ~p, ~p,", [SQL, JoinedDocIds]),
+    % TODO: loop over chunks of 999
+    SQLFun = fun(DocIdsChunk) ->
+        Qs = make_qs(length(DocIdsChunk)),
+        JoinedDocIds = lists:map(fun binary_to_list/1, DocIdsChunk),
+        SQL = "SELECT id, seq, revtree FROM documents WHERE id IN (" ++ Qs++ ") AND latest=1",
+        couch_log:info("~n~nSQL: ~p, ~p,", [SQL, JoinedDocIds]),
 
-    Result = esqlite3:q(SQL, JoinedDocIds, Db),
-    couch_log:info("~n~nResult: ~p", [Result]),
-    
+        Result = esqlite3:q(SQL, JoinedDocIds, Db),
+        couch_log:info("~n~nResult: ~p", [Result]),
+        Result
+    end,
+
+    Result = chunk_collect_query(DocIds, SQLFun, []),
+
     R = lists:map(fun(DocId) ->
         % couch_log:info("~n~nDocId: ~p", [DocId]),
         case lists:keyfind(DocId, 1, Result) of
             false -> not_found;
-            {DocId, RowId, RevTree0} ->
+            {DocId, Seq, RevTree0} ->
                 RevTree = case RevTree0 of
                     undefined -> [];
                     _Else -> binary_to_term(base64:decode(RevTree0))
                 end,
                 #full_doc_info{
                     id = DocId,
-                    update_seq = RowId,
+                    update_seq = Seq,
                     deleted = false,
                     rev_tree = RevTree,
                     sizes = #size_info{}
@@ -395,13 +413,18 @@ open_docs(#sqldb{db = Db}, DocIds) ->
 
 open_local_docs(#sqldb{db = Db}, DocIds) ->
     couch_log:info("~n> open_local_docs(~p)~n", [DocIds]),
+    SQLFun = fun(DocIdsChunk) ->
+        JoinedDocIds = lists:join(",", DocIdsChunk),
+        % TODO: loop over chunks of 999
+        SQL = "SELECT id, rev, body FROM documents WHERE id IN (?) AND latest=1",
+        couch_log:info("~n~nSQL: ~p, ~p", [SQL, DocIdsChunk]),
 
-    JoinedDocIds = lists:join(",", DocIds),
-    SQL = "SELECT id, rev, body FROM documents WHERE id IN (?) AND latest=1",
-    couch_log:info("~n~nSQL: ~p, ~p", [SQL, DocIds]),
+        ResultChunk = esqlite3:q(SQL, [JoinedDocIds], Db),
+        couch_log:info("~n~nResult: ~p", [ResultChunk]),
+        ResultChunk
+    end,
 
-    Result = esqlite3:q(SQL, [JoinedDocIds], Db),
-    couch_log:info("~n~nResult: ~p", [Result]),
+    Result = chunk_collect_query(DocIds, SQLFun, []),
 
     lists:map(fun(DocId) ->
         couch_log:info("~n~nDocId: ~p", [DocId]),
@@ -428,7 +451,10 @@ read_doc_body(#sqldb{db = Db}, #doc{id = Id, revs = {Start, RevIds}} = Doc) ->
         [] -> {false, not_found};
         [{Body, Deleted0}] -> {Deleted0, Body}
     end,
-    {BodyList} = couch_util:json_decode(Result),
+    {BodyList} = case Result of
+        not_found -> {[]};
+        _ -> couch_util:json_decode(Result)
+    end,
     FilterIdAndRev = fun({Key, _Value}) -> Key =:= <<"_id">> orelse Key =:= <<"_rev">> end,
     BodyTerm = {lists:dropwhile(FilterIdAndRev, BodyList)},
     DeletedBool = case Deleted of
@@ -442,14 +468,14 @@ load_purge_infos(#sqldb{db = Db}, UUIDs) ->
 
 load_purge_info(Db, UUID) ->
     couch_log:info("~n> load_purge_info(~p)~n", [UUID]),
-    SQL = "SELECT purge_seq, docid, rev FROM purges WHERE uuid = ?1",
+    SQL = "SELECT purge_seq, uuid, docid, rev FROM purges WHERE uuid = ?1",
     case esqlite3:q(SQL, [UUID], Db) of
         [] ->
             not_found;
         Result ->
             couch_log:info("~n>  Result: ~p~n", [Result]),
-            lists:foldl(fun({PurgeSeq, DocId, Rev}, {_PurgeSeq, _DocId, Revs}) ->
-                {PurgeSeq, DocId, [Rev|Revs]}
+            lists:foldl(fun({PurgeSeq, UUID, DocId, Rev}, {_PurgeSeq, _DocId, Revs}) ->
+                {PurgeSeq, UUID, DocId, [Rev|Revs]}
             end, {null, null, []}, Result)
     end.
 
@@ -491,6 +517,7 @@ write_doc_infos(#sqldb{db = Db} = State, Pairs, LocalDocs) ->
             _False -> 0
         end,
         SQL = "UPDATE documents SET revtree=?1, deleted=?2 WHERE id=?3 AND latest=1",
+        couch_log:info("~n>write_doc_infos() SQL: ~p, ?1~p, ?2~p, ?3~p ~n", [SQL, RevTreeList, Deleted, NewFDI#full_doc_info.id]),
         {ok, Update} = esqlite3:prepare(SQL, Db),
         ok = esqlite3:bind(Update, [RevTreeList, Deleted, NewFDI#full_doc_info.id]),
         '$done' = esqlite3:step(Update)
@@ -512,12 +539,14 @@ write_doc_infos(#sqldb{db = Db} = State, Pairs, LocalDocs) ->
     {ok, NewState}.
 
 purge_docs(#sqldb{db = Db}=State, Pairs, PurgeInfos) ->
-    couch_log:info("~n> purge_docs(PurgeInfos: ~p)~n", [PurgeInfos]),
+    couch_log:info("~n> purge_docs(PurgeInfos: ~p) Pairs: ~p~n", [PurgeInfos, Pairs]),
+    % TODO: bracket in transaction
     lists:foreach(fun
         ({not_found, not_found}) ->
             ok;
         ({OldFDI, not_found}) ->
-            SQL = "DELETE FROM documents WHERE id=?1",
+            SQL = "UPDATE documents SET id=NULL, rev=NULL, revtree=NULL, deleted=NULL, latest=1, purged=1, local=0, body=NULL WHERE id=?1",
+            couch_log:info("~n> purge_docs() SQL: ~p id=~p~n", [SQL, OldFDI#full_doc_info.id]),
             {ok, Update} = esqlite3:prepare(SQL, Db),
             ok = esqlite3:bind(Update, [OldFDI#full_doc_info.id]),
             '$done' = esqlite3:step(Update);
@@ -531,6 +560,9 @@ purge_docs(#sqldb{db = Db}=State, Pairs, PurgeInfos) ->
             '$done' = esqlite3:step(Update)
     end, Pairs),
     lists:foreach(fun (PurgeInfo) -> write_purge_info(Db, PurgeInfo) end, PurgeInfos),
+    SQL1 = "INSERT INTO documents (id, rev, revtree, deleted, latest, purged, local, body) values (NULL, NULL, NULL, NULL, 1, 1, 0, NULL)",
+    couch_log:info("~n> purge_docs() SQL1: ~p~n", [SQL1]),
+    ok = esqlite3:exec(SQL1, Db),
     {ok, State}.
 
 write_purge_info(Db, {PurgeSeq, UUID, DocId, Revs}) ->
@@ -584,7 +616,11 @@ fold_local_docs(#sqldb{db = Db}, UserFun, UserAcc, Options) ->
     fold_docs_int(Db, UserFun, UserAcc, Options, local).
 fold_docs_int(Db, UserFun, UserAcc, Options, Type) ->
     couch_log:info("~n> fold_docs(_, _, _, Options: ~p)~n", [Options]),
-    SQL0 = "SELECT id, rowid, revtree, rev FROM documents WHERE latest = 1 AND deleted = 0 ",
+    IgnoreDeleted = case Type of
+        changes -> "";
+        _ -> "AND deleted = 0 "
+    end,
+    SQL0 = "SELECT id, seq, revtree, rev, body FROM documents WHERE latest = 1 " ++ IgnoreDeleted,
     LocalSQL = case Type of
         local -> "AND local = 1 ";
         _Global -> "AND local != 1 "
@@ -600,7 +636,7 @@ fold_docs_int(Db, UserFun, UserAcc, Options, Type) ->
     Result = esqlite3:q(SQL, Db),
     couch_log:info("~n> fold_docs() Result: ~p~n", [Result]),
     FinalNewUserAcc = try
-        lists:foldl(fun({Id, RowId, RevTree0, Rev}, Acc) ->
+        lists:foldl(fun({Id, Seq, RevTree0, Rev, Body}, Acc) ->
             RevTree = case RevTree0 of
                 undefined -> [];
                 % TODO: hackety hack: split out into separate docs
@@ -611,14 +647,15 @@ fold_docs_int(Db, UserFun, UserAcc, Options, Type) ->
                     [Pos, RevId] = string:split(?b2l(Rev), "-"),
                     #doc{
                         id = Id,
-                        revs = {list_to_integer(Pos), [RevId]}
+                        revs = {list_to_integer(Pos), [RevId]},
+                        body = couch_util:json_decode(Body)
                     };
                 _Global1 ->
                     #full_doc_info{
                         id = Id,
                         rev_tree = RevTree,
                         deleted = false,
-                        update_seq = RowId,
+                        update_seq = Seq,
                         sizes = #size_info{}
                     }
             end,
@@ -662,7 +699,7 @@ fold_docs_int(Db, UserFun, UserAcc, Options, Type) ->
     end.
 
 fold_changes(#sqldb{db = Db}, SinceSeq, UserFun, UserAcc, Options0) ->
-    Options = [{start_key, SinceSeq+1} | Options0],
+    Options = [{start_key, SinceSeq + 1} | Options0],
     couch_log:info("~n> fold_changes(~p)~n", [Options]),
     fold_docs_int(Db, UserFun, UserAcc, Options, changes).
 
@@ -682,7 +719,7 @@ fold_purge_infos(#sqldb{db = Db}, StartSeq, UserFun, UserAcc, Options) ->
         ({PurgeSeq, UUID, DocId, Rev}, []) -> [{PurgeSeq, UUID, DocId, [rev_to_binary(Rev)]}];
         ({PurgeSeq, UUID, DocId, Rev}, [{LastPurgeSeq, LastUUID, LastDocId, LastRevs}=LastPurgeInfo | RestAcc]) ->
             case LastPurgeSeq of
-                PurgeSeq -> [{LastPurgeSeq, LastUUID, LastDocId, [rev_to_binary(Rev) | LastRevs]} | RestAcc]; % keep collecting
+                PurgeSeq -> [{LastPurgeSeq, LastUUID, LastDocId, LastRevs ++ [rev_to_binary(Rev)]} | RestAcc]; % keep collecting
                 _ -> [{PurgeSeq, UUID, DocId, [rev_to_binary(Rev)]}] ++ [LastPurgeInfo] ++ RestAcc % start collecting revs for this docId
             end
     end, [], Result),
@@ -710,10 +747,13 @@ count_changes_since(#sqldb{db = Db}, SinceSeq) ->
 start_compaction(#sqldb{db = Db} = State, DbName, Options, Parent) ->
     couch_log:info("~n> start_compaction(DbName: ~p, Options: ~p)~n", [DbName, Options]),
     Pid = spawn_link(fun() ->
-        SQL = "DELETE FROM documents WHERE latest != 1;",
+        SQL = "DELETE FROM documents WHERE latest != 1 OR id = NULL;",
         ok = esqlite3:exec(SQL, Db),
         SQL2 = "VACUUM;",
         ok = esqlite3:exec(SQL2, Db),
+        PurgeInfosLimit = integer_to_list(get_purge_infos_limit(State)),
+        SQL3 = "DELETE FROM purges WHERE purge_seq NOT IN (SELECT purge_seq FROM purges ORDER BY purge_seq DESC LIMIT " ++ PurgeInfosLimit ++ ")",
+        ok = esqlite3:exec(SQL3, Db),
         gen_server:cast(Parent, {compact_done, ?MODULE, {}})
     end),
     {ok, State, Pid}.
@@ -764,8 +804,9 @@ changes_options_to_sql(Options, _Type) ->
         fwd -> ">=";
         _ -> "<="
     end,
-    Since = proplists:get_value(start_key, Options, 0),
-    " AND rowid " ++ Cmp ++ " " ++ integer_to_list(Since).
+    Since = proplists:get_value(start_key, Options),
+    " AND seq " ++ Cmp ++ " " ++ integer_to_list(Since).
+    % " AND seq >= " ++ integer_to_list(Since).
 
 options_to_sql([], _Type) -> "";
 options_to_sql([{dir,_}], _Type) -> ""; % shortcut, maybe better parse options into easier to build-from structure
@@ -776,7 +817,7 @@ options_to_sql(Options, Type) ->
     HasEndKeyGt = proplists:lookup(end_key_gt, Options) /= none,
     case Type of
         changes ->
-            " AND rowid >= '" ++ ?b2l(StartKey) ++ "'";
+            " AND seq >= '" ++ ?b2l(StartKey) ++ "'";
         _Else ->
             case Dir of
                 fwd ->
@@ -789,7 +830,7 @@ options_to_sql(Options, Type) ->
 options_to_order_sql(Options, Type) ->
     parse_order(proplists:get_value(dir, Options, fwd), Type).
 
-parse_order(fwd, changes) -> " ORDER BY rowid ASC";
-parse_order(rev, changes) -> " ORDER BY rowid DESC";
+parse_order(fwd, changes) -> " ORDER BY seq ASC";
+parse_order(rev, changes) -> " ORDER BY seq DESC";
 parse_order(fwd, _) -> " ORDER BY id ASC";
 parse_order(rev, _) -> " ORDER BY id DESC".

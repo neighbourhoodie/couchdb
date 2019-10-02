@@ -118,66 +118,66 @@ cpse_purge_http_replication({Source, Target}) ->
         {purge_infos, PurgeInfos}
     ]).
 
-
-cpse_purge_internal_repl_disabled({Source, Target}) ->
-    cpse_util:with_config([{"mem3", "replicate_purges", "false"}], fun() ->
-        repl(Source, Target),
-
-        {ok, [Rev1, Rev2]} = cpse_util:save_docs(Source, [
-            {[{'_id', foo1}, {vsn, 1}]},
-            {[{'_id', foo2}, {vsn, 2}]}
-        ]),
-
-        repl(Source, Target),
-
-        PurgeInfos1 = [
-            {cpse_util:uuid(), <<"foo1">>, [Rev1]}
-        ],
-        {ok, [{ok, PRevs1}]} = cpse_util:purge(Source, PurgeInfos1),
-        ?assertEqual([Rev1], PRevs1),
-
-        PurgeInfos2 = [
-            {cpse_util:uuid(), <<"foo2">>, [Rev2]}
-        ],
-        {ok, [{ok, PRevs2}]} = cpse_util:purge(Target, PurgeInfos2),
-        ?assertEqual([Rev2], PRevs2),
-
-        SrcShard = make_shard(Source),
-        TgtShard = make_shard(Target),
-        ?assertEqual({ok, 0}, mem3_rep:go(SrcShard, TgtShard)),
-        ?assertEqual({ok, 0}, mem3_rep:go(TgtShard, SrcShard)),
-
-        ?assertMatch({ok, #doc_info{}}, cpse_util:open_doc(Source, <<"foo2">>)),
-        ?assertMatch({ok, #doc_info{}}, cpse_util:open_doc(Target, <<"foo1">>))
-    end).
-
-
-cpse_purge_repl_simple_pull({Source, Target}) ->
-    repl(Source, Target),
-
-    {ok, Rev} = cpse_util:save_doc(Source, {[{'_id', foo}, {vsn, 1}]}),
-    repl(Source, Target),
-
-    PurgeInfos = [
-        {cpse_util:uuid(), <<"foo">>, [Rev]}
-    ],
-    {ok, [{ok, PRevs}]} = cpse_util:purge(Target, PurgeInfos),
-    ?assertEqual([Rev], PRevs),
-    repl(Source, Target).
-
-
-cpse_purge_repl_simple_push({Source, Target}) ->
-    repl(Source, Target),
-
-    {ok, Rev} = cpse_util:save_doc(Source, {[{'_id', foo}, {vsn, 1}]}),
-    repl(Source, Target),
-
-    PurgeInfos = [
-        {cpse_util:uuid(), <<"foo">>, [Rev]}
-    ],
-    {ok, [{ok, PRevs}]} = cpse_util:purge(Source, PurgeInfos),
-    ?assertEqual([Rev], PRevs),
-    repl(Source, Target).
+%
+% cpse_purge_internal_repl_disabled({Source, Target}) ->
+%     cpse_util:with_config([{"mem3", "replicate_purges", "false"}], fun() ->
+%         repl(Source, Target),
+%
+%         {ok, [Rev1, Rev2]} = cpse_util:save_docs(Source, [
+%             {[{'_id', foo1}, {vsn, 1}]},
+%             {[{'_id', foo2}, {vsn, 2}]}
+%         ]),
+%
+%         repl(Source, Target),
+%
+%         PurgeInfos1 = [
+%             {cpse_util:uuid(), <<"foo1">>, [Rev1]}
+%         ],
+%         {ok, [{ok, PRevs1}]} = cpse_util:purge(Source, PurgeInfos1),
+%         ?assertEqual([Rev1], PRevs1),
+%
+%         PurgeInfos2 = [
+%             {cpse_util:uuid(), <<"foo2">>, [Rev2]}
+%         ],
+%         {ok, [{ok, PRevs2}]} = cpse_util:purge(Target, PurgeInfos2),
+%         ?assertEqual([Rev2], PRevs2),
+%
+%         SrcShard = make_shard(Source),
+%         TgtShard = make_shard(Target),
+%         ?assertEqual({ok, 0}, mem3_rep:go(SrcShard, TgtShard)),
+%         ?assertEqual({ok, 0}, mem3_rep:go(TgtShard, SrcShard)),
+%
+%         ?assertMatch({ok, #doc_info{}}, cpse_util:open_doc(Source, <<"foo2">>)),
+%         ?assertMatch({ok, #doc_info{}}, cpse_util:open_doc(Target, <<"foo1">>))
+%     end).
+%
+%
+% cpse_purge_repl_simple_pull({Source, Target}) ->
+%     repl(Source, Target),
+%
+%     {ok, Rev} = cpse_util:save_doc(Source, {[{'_id', foo}, {vsn, 1}]}),
+%     repl(Source, Target),
+%
+%     PurgeInfos = [
+%         {cpse_util:uuid(), <<"foo">>, [Rev]}
+%     ],
+%     {ok, [{ok, PRevs}]} = cpse_util:purge(Target, PurgeInfos),
+%     ?assertEqual([Rev], PRevs),
+%     repl(Source, Target).
+%
+%
+% cpse_purge_repl_simple_push({Source, Target}) ->
+%     repl(Source, Target),
+%
+%     {ok, Rev} = cpse_util:save_doc(Source, {[{'_id', foo}, {vsn, 1}]}),
+%     repl(Source, Target),
+%
+%     PurgeInfos = [
+%         {cpse_util:uuid(), <<"foo">>, [Rev]}
+%     ],
+%     {ok, [{ok, PRevs}]} = cpse_util:purge(Source, PurgeInfos),
+%     ?assertEqual([Rev], PRevs),
+%     repl(Source, Target).
 
 
 repl(Source, Target) ->

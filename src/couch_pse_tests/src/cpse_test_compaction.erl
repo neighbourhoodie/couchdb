@@ -112,24 +112,25 @@ cpse_compact_with_everything(Db1) ->
             Db4, 0, fun fold_fun/2, [], []),
     ?assertEqual(PurgedIdRevs, PIdRevs4),
 
-    {ok, Db5} = try
-        [Att0, Att1, Att2, Att3, Att4] = cpse_util:prep_atts(Db4, [
-                {<<"ohai.txt">>, crypto:strong_rand_bytes(2048)},
-                {<<"stuff.py">>, crypto:strong_rand_bytes(32768)},
-                {<<"a.erl">>, crypto:strong_rand_bytes(29)},
-                {<<"a.hrl">>, crypto:strong_rand_bytes(5000)},
-                {<<"a.app">>, crypto:strong_rand_bytes(400)}
-            ]),
-
-        Actions4 = [
-            {create, {<<"small_att">>, {[]}, [Att0]}},
-            {create, {<<"large_att">>, {[]}, [Att1]}},
-            {create, {<<"multi_att">>, {[]}, [Att2, Att3, Att4]}}
-        ],
-        cpse_util:apply_actions(Db4, Actions4)
-    catch throw:not_supported ->
-        {ok, Db4}
-    end,
+    % {ok, Db5} = try
+    %     [Att0, Att1, Att2, Att3, Att4] = cpse_util:prep_atts(Db4, [
+    %             {<<"ohai.txt">>, crypto:strong_rand_bytes(2048)},
+    %             {<<"stuff.py">>, crypto:strong_rand_bytes(32768)},
+    %             {<<"a.erl">>, crypto:strong_rand_bytes(29)},
+    %             {<<"a.hrl">>, crypto:strong_rand_bytes(5000)},
+    %             {<<"a.app">>, crypto:strong_rand_bytes(400)}
+    %         ]),
+    %
+    %     Actions4 = [
+    %         {create, {<<"small_att">>, {[]}, [Att0]}},
+    %         {create, {<<"large_att">>, {[]}, [Att1]}},
+    %         {create, {<<"multi_att">>, {[]}, [Att2, Att3, Att4]}}
+    %     ],
+    %     cpse_util:apply_actions(Db4, Actions4)
+    % catch throw:not_supported ->
+    %     {ok, Db4}
+    % end,
+    Db5 = Db4,
     {ok, _} = couch_db:ensure_full_commit(Db5),
     {ok, Db6} = couch_db:reopen(Db5),
 
@@ -263,7 +264,7 @@ cpse_multiple_purge_during_compact(Db1) ->
 
 
 cpse_compact_purged_docs_limit(Db1) ->
-    NumDocs = 1200,
+    NumDocs = 12,
     {RActions, RIds} = lists:foldl(fun(Id, {CActions, CIds}) ->
         Id1 = docid(Id),
         Action = {create, {Id1, {[{<<"int">>, Id}]}}},
