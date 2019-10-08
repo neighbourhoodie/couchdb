@@ -1,3 +1,213 @@
+% A SQLite Storage Engine for Apache CouchDB™®
+%
+% (c) 2018-2019 Jan Lehnardt <jan@apache.org>
+%     to be relicensed to Neighbourhoodie Software in the future.
+%
+% # Introduction
+%
+% This module implements the CouchDB Pluggable Storage Engine API that
+% is compatible with CouchDB versions 2.2.0 to 3.x.
+%
+% Special thanks to Paul Davis for creating that API and for answering
+% a few detail questions. And thanks to Russell Branca for answering a
+% few detail questions about is lethe implementation of the API.
+%
+% The goal of this module is to provide an alternative to CouchDB’s
+% default B+-Tree-based storage engine that uses less storage space
+% when operating. This is mainly advantageous in situations where
+% CouchDB is deployed on systems with limited harddrive space like
+% point of sales systems or on regular desktop systems where it
+% competes with other software for disk resources.
+%
+% SQLite was chosen for it’s ease-of-use, fit-of-task, as well as its
+% robustness and flexibility. No other embedded database combines the
+% desirable features in a way that SQLite does.
+%
+% # Description
+%
+% The Plugabble Storage Engine (PSE) API for CouchDB defines a common
+% set of function calls for persisting databases on disk and making
+% that data available to subsequent retrieval while maintaining regular
+% CouchDB API semantics. This includes documents, local documents, the
+% by-id and by-seq indexes as well as database security and metadata.
+%
+% A detailed description of that API can be found in CouchDB’s
+% `couch_db_engine.erl` file.
+%
+% A storage engine needs to take care of the following tasks:
+%
+% - store documents of varying revisions, including local documents
+% - retrieve individual documents by their `_id`
+% - iterate (fold) over documents in `_id` or `_update_seq` order,
+%   including various parameters like start/end-keys, descending order,
+%   etc.
+% - handle the purging of documents
+% - handle folding of purge information
+% - manage database metadata like empochs, a last updated timespamp,
+%   security, uuid, revs_limit, purge_info_limit, size information etc.
+% - manage compaction, if applicable
+% - optionally handle attachment storage (this engine does not support
+%   attachments yet)
+%
+% The SQLite Storage Engine for Apache CouchDB uses the SQLite embedded
+% database system for the actual data storage and retrieval, it further
+% uses the Erlang module esqlite which is a NIF wrapper around SQLite’s
+% C-Library to make it accessible to Erlang code.
+%
+% # Implementation
+%
+% This storage engine uses a single SQLite database file per CouchDB
+% database. It uses the following set of SQL tables inside a database
+% to represent the CouchDB data model:
+%
+% - `meta`: stores all sorts of metadata
+% - `epochs`: store the epoch of a database (TODO: explain why this is
+%   not in meta)
+% - `purges`: stores all purge information up to the `purge_info_limit`
+% - `documents`: stores all document data except for document bodies and
+%   `attachments`
+% - `doc_bodies`: stores all document bodies, keyed by id and revision
+% - `local_docs`: like `documents`, but stores all local doc info,
+%   including bodies.
+%
+% The by-id and by-seq indexes are realised as indexes on the
+% `documents` database.
+%
+% ## Document Storage
+%
+% This section explains in detail how documents are stored and retrieved
+% across the various associated tables.
+%
+% Document information except bodies and attachments is stored in the
+% `documents` table. Each document revision is represented by a row in
+% the table. In order to enforce this, there is a `UNIQUE` constraint
+% on `(id, rev)`. More specifically, each row in the `documets` table
+% represents one `update_seq` in CouchDB-terms. In order to represent
+% the update sequence, the `seq` column is defined as `INTEGER PRIMARY
+% KEY AUTOINCREMENT` which has the effect of an ever increasing integer
+% value for each new row in the table. Without the `AUTOINCREMENT`
+% keyword, if the last inserted row were to be deleted, the next row
+% would get the previous row’s id assigned. We can’t have that for
+% update dequences.
+%
+% // TODO: max rows (row count or int size)
+%
+%
+% ### Writing a Document
+%
+% Writing a document is a two-step process. First a document revision
+% body is written to the storage engine (`write_doc_body()`) and then
+% at a later time, the information about that document revision is
+% stored (`write_doc_infos()`).
+%
+% Writing document bodies is straightforward: a new entry is made in
+% the `doc_bodies` table, with a UNIQUE key on `(id, rev)`, so each
+% document revision is only stored *once and only once* and can be
+% *found efficiently*.
+%
+% Writing doc infos is a little bit more complicated, because of the
+% nature of the API (see the API documentation for details), where we
+% have to handle a list of pairs of previous document revision and new
+% document revision, where a `not_found` atom signifies that there is
+% no previous revision and a new document should be created.
+%
+% A row in the `documents` table represents one infividual update
+% sequence. In CouchDB terms, this is either a document creation, a
+% document update, a document delete, or a purge of one or more
+% documents.
+%
+% Each document revision is represented by *a single row* in the
+% `documents` table. That means each document is be represented
+% multiple times, once per revision. We keep track of whether a doc is
+% the lastest revision in the `latest` column of the `documents` table.
+%
+% A single row stores all document information, includding the revision
+% tree (or `revtree`) which also holds all information about conflicts.
+%
+% ### Updating a Document
+%
+% Similarly to “Writing a Document”, a document body is written into
+% the `doc_bodies` table. But before we write the new row for the
+% incoming document revision, we set `latest` to `0` (`false`) for the
+% previous revision. Then we write the regular row for the new document
+% revision. Both of these operations happen in separate SQL statements,
+% but they are bracketed by a transaction, so we can guarantee that the
+% writing of a document is happening *atomically*.
+%
+% ### Deleting a Document
+%
+% Same as with updating , but the `deleted` flag is set on the new
+% document revision info. Since we need to keep deleted documents
+% around but we need to differentiate between deleted and non-deleted
+% documents in by-id and by-changes, we track the deleted info in a
+% separate field in the `documents` table.
+%
+% ### Purging a Document
+%
+% The operation of purging a documents requires the storage engine to
+% do two things:
+%
+% 1. expunge any data corresponding to a document from storage
+% 2. record that the document id/rev combination was purged
+%
+% The effect of a purge is pretending a document has never been written
+% to the database in the first place. Recording a history of purge infos
+% allow a cluster to apply purges across all shards of a database in a
+% way that replication doesn’t re-create those document revisions.
+%
+% Purge is implemented by setting all values of a document’s row in the
+% `documents` table to `NULL`. (TODO: why not delete directly?)
+%
+% In addition, the purge needs to increment the CouchDB database’s
+% `update_seq`, so we insert a row for that with all `NULL` values, so
+% the `seq` can increment by one.
+%
+% ### Reading a Document
+%
+% Reading a document is a two-step process, just like writing one. First
+% `open_docs()` is called with a list of none or more document ids and
+% the function asks the by-id index for information about those document
+% ids and it returns a list of `#full_doc_infos`, one per id. CouchDB
+% then later reads the associated document body for one of the
+% `#full_doc_infos` in `read_doc_body()` that works analogous to
+% `write_doc_body()` and reads a specific document body/revision
+% combination.
+%
+% ## Compaction
+%
+% Compaction instructs the storage engine to remove excess data. It is
+% essential in the CouchDB’s storage engine, and this storage engine
+% also makes use of it.
+%
+% 1. SQLite has a VACUUM command that rids a SQLite database of any
+% internal-to-SQLite excess data by producting a completely new file on
+% disk and swapping the old and new files atomically, very similar to
+% the default storage engine.
+%
+% 2. This storage engine uses additinoal excess data during normal
+% operation that can be pruned during compaction:
+%
+%   1. To increment the update sequence to represent the storage of a
+%   purge info, we introduce NULL rows. Those rows can now be removed.
+%
+%   2. Document bodies stored in the `doc_bodies` table that represent
+%   revisions that are not the latest revision and not conflicting
+%   revisions can be removed. TBD on how to parse revtree to find
+%   non-prphan bodies.
+%
+%   3. Delete all but the latest `purge_info_limit` entries in the
+%   `purges` table.
+%
+% ### Folding over Documents
+%
+% by-id: latest=1 && deleted = 0
+% by-seq: latest=1
+%
+% ## Purging
+% ## Metadata
+%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 -module(couch_sqlite_engine).
 -behavior(couch_db_engine).
 
@@ -69,7 +279,9 @@
   update_epochs = false, % whether or not to write out new epochs on next write
   epochs = [],
   epochs_flushed = false, % set to true after next write
-  last_activity = 0
+  last_activity = 0,
+  monitor = nil,
+  pid = nil
 }).
 
 -define(DISK_VERSION, 1).
@@ -84,14 +296,20 @@
 
 % TODO:
 % strip out _id and _rev from doc body
-% compaction: prune rev trees, remove NULL docs and bump seq
+% compaction: prune rev trees
+% enforce revs_limit
+% write doc infos: prune rev infos from rev_tree
+% rename documents table to docs
 
 
 exists(FilePath) ->
     couch_log:info("~n> exists(FilePath: ~p)~n", [FilePath]),
     filelib:is_file(FilePath).
+    
+
 delete(_RootDir, FilePath, _Async) -> file:delete(FilePath).
 % delete(_RootDir, FilePath, _Async) -> ok. % uncomment to debug sqlite file after test run
+
 delete_compaction_files(_RootDir, _FilePath, _DelOpts) -> ok.
 
 init(FilePath, _Options) ->
@@ -111,30 +329,53 @@ init(FilePath, _Options) ->
         ++ "id TEXT, "
         ++ "rev TEXT, "
         ++ "revtree TEXT, "
+        ++ "latest INT DEFAULT 0, "
         ++ "deleted INT DEFAULT 0, "
-        ++ "latest INT DEFAULT 1, "
         ++ "purged INT DEFAULT 0, "
-        ++ "local INT DEFAULT 0, "
-        ++ "body BLOB, "
         ++ "UNIQUE(id, rev))",
     DocumentsIndexes = [
         "CREATE INDEX IF NOT EXISTS id ON documents (id)",
         "CREATE INDEX IF NOT EXISTS idrev ON documents (id, rev)",
         % "CREATE INDEX IF NOT EXISTS seq ON documents (seq)",
-        "CREATE INDEX IF NOT EXISTS deleted ON documents (deleted)",
         "CREATE INDEX IF NOT EXISTS latest ON documents (latest)",
-        "CREATE INDEX IF NOT EXISTS latest ON documents (purged)",
-        "CREATE INDEX IF NOT EXISTS local ON documents (local)"%,
+        "CREATE INDEX IF NOT EXISTS deleted ON documents (deleted)",
+        "CREATE INDEX IF NOT EXISTS purged ON documents (purged)"
         % "CREATE INDEX IF NOT EXISTS rowid ON documents (rowid)"
+    ],
+    DocBodies = "CREATE TABLE IF NOT EXISTS doc_bodies ("
+        ++ "id TEXT, "
+        ++ "rev TEXT, "
+        ++ "body BLOB, "
+        ++ "UNIQUE(id, rev))",
+    DocBodyIndexes = [
+        "CREATE INDEX IF NOT EXISTS idrev ON documents (id, rev)"
+    ],
+    LocalDocuments = "CREATE TABLE IF NOT EXISTS local_docs ("
+        ++ "seq INTEGER PRIMARY KEY AUTOINCREMENT, "
+        ++ "id TEXT, "
+        ++ "rev TEXT, "
+        ++ "revtree TEXT, "
+        ++ "deleted INT DEFAULT 0, "
+        ++ "purged INT DEFAULT 0, "
+        ++ "body BLOB, "
+        ++ "UNIQUE(id, rev))",
+    LocalDocumentsIndexes = [
+        "CREATE INDEX IF NOT EXISTS id ON local_docs (id)",
+        "CREATE INDEX IF NOT EXISTS idrev ON local_docs (id, rev)",
+        % "CREATE INDEX IF NOT EXISTS seq ON local_docs (seq)",
+        "CREATE INDEX IF NOT EXISTS deleted ON local_docs (deleted)",
+        "CREATE INDEX IF NOT EXISTS purged ON local_docs (purged)"
+        % "CREATE INDEX IF NOT EXISTS rowid ON local_docs (rowid)"
     ],
     ok = esqlite3:exec(Meta, Db),
     ok = esqlite3:exec(Epochs, Db),
     ok = esqlite3:exec(Purges, Db),
     ok = esqlite3:exec(Documents, Db),
+    ok = esqlite3:exec(DocBodies, Db),
+    ok = esqlite3:exec(LocalDocuments, Db),
     lists:foreach(fun (IdxDef) ->
         ok = esqlite3:exec(IdxDef, Db)
-    end, DocumentsIndexes ++ PurgeIndexes),
-    % TODO Purges = "CREATE TABLE purges IF NOT EXISTS",
+    end, DocumentsIndexes ++ DocBodyIndexes ++ LocalDocumentsIndexes ++ PurgeIndexes),
     % TODO Attachments = "CREATE TABLE attachments ()"
     State = init_state(Db),
     case load_meta(uuid, Db) of
@@ -150,7 +391,9 @@ init_state(Db) ->
        db = Db,
        update_epochs = UpateEpochs,
        epochs = Epochs,
-       last_activity = os:timestamp()
+       last_activity = os:timestamp(),
+       pid = self(),
+       monitor = nil
     }.
 
 init_security(Db) ->
@@ -211,9 +454,23 @@ handle_db_updater_info(Msg, State) ->
     couch_log:info("~n> handle_db_updater_info(~p) ~n", [Msg]),
     {noreply, State}.
 
-incref(State) -> {ok, State}.
-decref(_Db) -> ok.
-monitored_by(_Db) -> [].
+incref(State) ->
+    {ok, State#sqldb{monitor = erlang:monitor(process, State#sqldb.pid)}}.
+
+
+decref(State) ->
+    true = erlang:demonitor(State#sqldb.monitor, [flush]),
+    ok.
+
+
+monitored_by(State) ->
+    case erlang:process_info(State#sqldb.pid, monitored_by) of
+        {monitored_by, Pids} ->
+            lists:filter(fun is_pid/1, Pids);
+        _ ->
+            []
+    end.
+
 
 last_activity(#sqldb{last_activity = LastActivity}) -> LastActivity.
 
@@ -254,7 +511,7 @@ get_compacted_seq(#sqldb{db = Db}) ->
 
 get_del_doc_count(#sqldb{db = Db}) ->
     couch_log:info("~n> get_del_doc_count()~n", []),
-    SQL = "SELECT COUNT(*) FROM documents WHERE latest=1 AND deleted=1 AND purged = 0",
+    SQL = "SELECT COUNT(*) FROM documents WHERE deleted=1 AND purged=0",
     case esqlite3:q(SQL, Db) of
         [] -> 0;
         [{DelDocCount}] ->
@@ -267,7 +524,7 @@ get_disk_version(_Db) ->
     ?DISK_VERSION.
 get_doc_count(#sqldb{db = Db}) ->
     couch_log:info("~n> get_doc_count()~n", []),
-    SQL = "SELECT COUNT(*) FROM documents WHERE latest=1 AND deleted=0 AND local=0 AND purged=0",
+    SQL = "SELECT COUNT(*) FROM documents WHERE deleted=0 AND purged=0 AND latest=1",
     case esqlite3:q(SQL, Db) of
         [] -> 0;
         [{DocCount}] ->
@@ -276,7 +533,7 @@ get_doc_count(#sqldb{db = Db}) ->
     end.
 get_epochs(#sqldb{db = Db}) ->
     couch_log:info("~n> get_epochs()~n", []),
-    SQL = "SELECT MAX(seq) FROM documents WHERE latest=1 AND deleted=0",
+    SQL = "SELECT MAX(seq) FROM documents WHERE deleted=0",
     case esqlite3:q(SQL, Db) of
         [] -> 0;
         [{undefined}] -> [{node(), 0}];
@@ -331,7 +588,7 @@ get_update_seq(#sqldb{db = Db}) ->
     get_update_seq(Db);
 get_update_seq(Db) ->
     couch_log:info("~n> get_update_seq(Db: ~p)~n", [Db]),
-    SQL = "SELECT MAX(seq) FROM documents WHERE local=0;",
+    SQL = "SELECT MAX(seq) FROM documents;",
     case esqlite3:q(SQL, Db) of
         [] -> 0;
         [{undefined}] -> 0;
@@ -380,7 +637,7 @@ open_docs(#sqldb{db = Db}, DocIds) ->
     SQLFun = fun(DocIdsChunk) ->
         Qs = make_qs(length(DocIdsChunk)),
         JoinedDocIds = lists:map(fun binary_to_list/1, DocIdsChunk),
-        SQL = "SELECT id, seq, revtree FROM documents WHERE id IN (" ++ Qs++ ") AND latest=1",
+        SQL = "SELECT id, seq, revtree FROM documents WHERE latest=1 AND id IN (" ++ Qs++ ")",
         couch_log:info("~n~nSQL: ~p, ~p,", [SQL, JoinedDocIds]),
 
         Result = esqlite3:q(SQL, JoinedDocIds, Db),
@@ -415,8 +672,7 @@ open_local_docs(#sqldb{db = Db}, DocIds) ->
     couch_log:info("~n> open_local_docs(~p)~n", [DocIds]),
     SQLFun = fun(DocIdsChunk) ->
         JoinedDocIds = lists:join(",", DocIdsChunk),
-        % TODO: loop over chunks of 999
-        SQL = "SELECT id, rev, body FROM documents WHERE id IN (?) AND latest=1",
+        SQL = "SELECT id, rev, body FROM local_docs WHERE id IN (?)",
         couch_log:info("~n~nSQL: ~p, ~p", [SQL, DocIdsChunk]),
 
         ResultChunk = esqlite3:q(SQL, [JoinedDocIds], Db),
@@ -444,24 +700,29 @@ open_local_docs(#sqldb{db = Db}, DocIds) ->
 read_doc_body(#sqldb{db = Db}, #doc{id = Id, revs = {Start, RevIds}} = Doc) ->
     couch_log:info("~n> read_doc_body(~p)~n", [Doc]),
     [{_, JsonRev}] = couch_doc:to_json_rev(Start, RevIds),
-    SQL = "SELECT body, deleted FROM documents WHERE id=?1 AND rev=?2",
+    SQL = "SELECT body FROM doc_bodies WHERE id=?1 AND rev=?2",
     SQLResult = esqlite3:q(SQL, [Id, JsonRev], Db),
-    couch_log:info("~n> SQL: ~p, SQLResult: ~p~n", [SQL, SQLResult]),
-    {Deleted, Result} = case SQLResult of
-        [] -> {false, not_found};
-        [{Body, Deleted0}] -> {Deleted0, Body}
+    couch_log:info("~n> SQL: ~p, ?1: ~p ?2: ~p SQLResult: ~p~n", [SQL, Id, JsonRev, SQLResult]),
+    Result = case SQLResult of
+        [] -> not_found;
+        [{Body}] -> Body
     end,
+    % {Deleted, Result} = case SQLResult of
+    %     [] -> {false, not_found};
+    %     [{Body, Deleted0}] -> {Deleted0, Body}
+    % end,
     {BodyList} = case Result of
         not_found -> {[]};
         _ -> couch_util:json_decode(Result)
     end,
     FilterIdAndRev = fun({Key, _Value}) -> Key =:= <<"_id">> orelse Key =:= <<"_rev">> end,
     BodyTerm = {lists:dropwhile(FilterIdAndRev, BodyList)},
-    DeletedBool = case Deleted of
-        1 -> true;
-        _Zero -> false
-    end,
-    Doc#doc{body = BodyTerm, deleted = DeletedBool}.
+    % DeletedBool = case Deleted of
+    %     1 -> true;
+    %     _Zero -> false
+    % end,
+    % Doc#doc{body = BodyTerm, deleted = DeletedBool}.
+    Doc#doc{body = BodyTerm}.
 load_purge_infos(#sqldb{db = Db}, UUIDs) ->
     couch_log:info("~n> load_purge_infos(~p)~n", [UUIDs]),
     lists:map(fun (UUID) -> load_purge_info(Db, UUID) end, UUIDs).
@@ -474,11 +735,13 @@ load_purge_info(Db, UUID) ->
             not_found;
         Result ->
             couch_log:info("~n>  Result: ~p~n", [Result]),
-            lists:foldl(fun({PurgeSeq, UUID, DocId, Rev}, {_PurgeSeq, _DocId, Revs}) ->
-                {PurgeSeq, UUID, DocId, [Rev|Revs]}
+            lists:foldl(fun({PurgeSeq, RowUUID, DocId, Rev}, {_PurgeSeq, _DocId, Revs}) ->
+                {PurgeSeq, RowUUID, DocId, [Rev|Revs]}
             end, {null, null, []}, Result)
     end.
 
+% TODO: add mode via config var where docs are exploded, it is likely slower, but would allow sql queries
+% also json1 extension in sqlite
 serialize_doc(_Db, Doc) ->
     couch_log:info("~n> serialize_doc(~p)~n", [Doc]),
     Doc.
@@ -487,41 +750,66 @@ write_doc_body(#sqldb{db = Db}, #doc{id=Id, revs={Start, RevIds}}=Doc) ->
     couch_log:info("~n> write_doc_body(~p)~n", [Doc]),
     JsonDoc = couch_util:json_encode(couch_doc:to_json_obj(Doc, [])),
     [{_, JsonRevs}] = couch_doc:to_json_rev(Start, RevIds),
-    ok = esqlite3:exec("begin;", Db),
 
-    % set all previous revisions to latest = 0
-    {ok, Update} = esqlite3:prepare("UPDATE documents SET latest=0 WHERE id=?1", Db),
-    ok = esqlite3:bind(Update, [Id]),
-    '$done' = esqlite3:step(Update),
-
-    % insert new revision, set latest = 1
     couch_log:info("~n> JsonRevs: ~p~n", [JsonRevs]),
     couch_log:info("~n> JsonDoc: ~p~n", [JsonDoc]),
-    SQL = "INSERT INTO documents (id, rev, deleted, latest, body)"
-        ++ " VALUES (?1, ?2, 0, 1, ?3)",
+    SQL = "INSERT INTO doc_bodies (id, rev, body)" % TODO: test if I can write a deleted doc here
+        ++ " VALUES (?1, ?2, ?3)",
     {ok, Insert} = esqlite3:prepare(SQL, Db),
     Bind = esqlite3:bind(Insert, [Id, JsonRevs, JsonDoc]),
     Step = esqlite3:step(Insert),
     couch_log:info("~n> SQL: ~p, Bind, ~p, Step: ~p~n", [SQL, Bind, Step]),
-    ok = esqlite3:exec("commit;", Db), % TODO: maybe move into write_doc_infos
+    % ok = esqlite3:exec("commit;", Db),
     {ok, Doc#doc{body=JsonDoc}, size(JsonDoc)}.
+
+fdi_to_json_revs(#full_doc_info{} = FDI) ->
+    #doc_info{revs=Revs} = couch_doc:to_doc_info(FDI),
+    fdi_to_json_revs(Revs, []).
+fdi_to_json_revs([], Acc) -> lists:reverse(Acc);
+fdi_to_json_revs([#rev_info{rev={Start, Rev}}|Rest], Acc) ->
+    [{_, JsonRev}] = couch_doc:to_json_rev(Start, [Rev]),
+    fdi_to_json_revs(Rest, [JsonRev|Acc]).
+
+fdi_to_json_rev(FDI) ->
+    #doc_info{revs=Revs} = couch_doc:to_doc_info(FDI),
+    #rev_info{rev={Start, Rev}} = lists:nth(1, Revs),
+    [{_, JsonRev}] = couch_doc:to_json_rev(Start, [Rev]),
+    JsonRev.
+
+insert_new_rev(NewFDI, Db) ->
+    RevTreeBin = term_to_binary(NewFDI#full_doc_info.rev_tree),
+    RevTreeList = base64:encode(?b2l(RevTreeBin)),
+    couch_log:info("~n> RevTree: ~p~n", [NewFDI#full_doc_info.rev_tree]),
+    Deleted = case NewFDI#full_doc_info.deleted of
+        true -> 1;
+        _False -> 0
+    end,
+    JsonRev = fdi_to_json_rev(NewFDI),
+    couch_log:info("~n>write_doc_infos(create|update) JsonRev: ~p~n", [JsonRev]),
+    SQL = "INSERT INTO documents (id, rev, revtree, latest, deleted) VALUES (?1, ?2, ?3, 1, ?4) "
+    ++ "ON CONFLICT (id, rev) DO UPDATE SET revtree=?3, latest=1, deleted=?4 WHERE id=?1 AND rev=?2",
+    couch_log:info("~n>write_doc_infos() SQL: ~p, ?1~p, ?2~p, ?3~p, ?4~p ~n", [SQL, NewFDI#full_doc_info.id, JsonRev, RevTreeList, Deleted]),
+    {ok, Update} = esqlite3:prepare(SQL, Db),
+    ok = esqlite3:bind(Update, [NewFDI#full_doc_info.id, JsonRev, RevTreeList, Deleted]),
+    '$done' = esqlite3:step(Update).
+
+maybe_un_latest_old_fdi(not_found, _Db) -> ok;
+maybe_un_latest_old_fdi(OldFDI, Db) ->
+    OldRev = fdi_to_json_revs(OldFDI),
+    OldSQL = "UPDATE documents SET latest=0 WHERE id=?1 AND rev=?2",
+    {ok, OldUpdate} = esqlite3:prepare(OldSQL, Db),
+    ok = esqlite3:bind(OldUpdate, [OldFDI#full_doc_info.id, OldRev]),
+    '$done' = esqlite3:step(OldUpdate).
 
 write_doc_infos(#sqldb{db = Db} = State, Pairs, LocalDocs) ->
     couch_log:info("~n> write_doc_infos(~p, ~p)~n", [Pairs, LocalDocs]),
-    lists:foreach(fun({_OldFDI, NewFDI}) ->
-        RevTreeBin = term_to_binary(NewFDI#full_doc_info.rev_tree),
-        RevTreeList = base64:encode(?b2l(RevTreeBin)),
-        couch_log:info("~n> RevTreeList: ~p~n", [RevTreeList]),
-        Deleted = case NewFDI#full_doc_info.deleted of
-            true -> 1;
-            _False -> 0
-        end,
-        SQL = "UPDATE documents SET revtree=?1, deleted=?2 WHERE id=?3 AND latest=1",
-        couch_log:info("~n>write_doc_infos() SQL: ~p, ?1~p, ?2~p, ?3~p ~n", [SQL, RevTreeList, Deleted, NewFDI#full_doc_info.id]),
-        {ok, Update} = esqlite3:prepare(SQL, Db),
-        ok = esqlite3:bind(Update, [RevTreeList, Deleted, NewFDI#full_doc_info.id]),
-        '$done' = esqlite3:step(Update)
+    ok = esqlite3:exec("begin;", Db),
+    lists:foreach(fun
+        ({OldFDI, NewFDI}) ->
+            maybe_un_latest_old_fdi(OldFDI, Db),
+            insert_new_rev(NewFDI, Db)            
     end, Pairs),
+    ok = esqlite3:exec("commit;", Db),
 
     lists:foreach(fun(#doc{id=Id,revs={Start, [Idx]}}=LocalDoc0) ->
         LocalDoc = LocalDoc0#doc{revs={Start, [integer_to_list(Idx)]}},
@@ -529,7 +817,7 @@ write_doc_infos(#sqldb{db = Db} = State, Pairs, LocalDocs) ->
         couch_log:info("~n> LocalDoc: ~p, JsonRevs: ~p~n", [LocalDoc, JsonRevs]),
         JsonDoc = couch_util:json_encode(couch_doc:to_json_obj(LocalDoc, [])),
         couch_log:info("~n> JsonDoc: ~p~n", [JsonDoc]),
-        SQL = "INSERT INTO documents (id, rev, body, local, latest, deleted) VALUES (?1, ?2, ?3, 1, 1, 0)",
+        SQL = "INSERT INTO local_docs (id, rev, body, deleted) VALUES (?1, ?2, ?3, 0)",
         couch_log:info("~n> SQL: ~p~n", [SQL]),
         {ok, Upsert} = esqlite3:prepare(SQL, Db),
         ok = esqlite3:bind(Upsert, [Id, JsonRevs, JsonDoc]),
@@ -538,31 +826,48 @@ write_doc_infos(#sqldb{db = Db} = State, Pairs, LocalDocs) ->
     NewState = maybe_update_epochs(State),
     {ok, NewState}.
 
+db_for_doc_id(<<"_local/",_/binary>>) -> "local_docs";
+db_for_doc_id(_) -> "documents".
+    
+
 purge_docs(#sqldb{db = Db}=State, Pairs, PurgeInfos) ->
     couch_log:info("~n> purge_docs(PurgeInfos: ~p) Pairs: ~p~n", [PurgeInfos, Pairs]),
-    % TODO: bracket in transaction
+    ok = esqlite3:exec("begin;", Db),
     lists:foreach(fun
         ({not_found, not_found}) ->
             ok;
         ({OldFDI, not_found}) ->
-            SQL = "UPDATE documents SET id=NULL, rev=NULL, revtree=NULL, deleted=NULL, latest=1, purged=1, local=0, body=NULL WHERE id=?1",
-            couch_log:info("~n> purge_docs() SQL: ~p id=~p~n", [SQL, OldFDI#full_doc_info.id]),
+            DocId = OldFDI#full_doc_info.id,
+            Rev = fdi_to_json_rev(OldFDI),
+            Database = db_for_doc_id(DocId),
+            SQL = "UPDATE " ++ Database ++ " SET id=NULL, rev=NULL, revtree=NULL, deleted=NULL, purged=1 WHERE id=?1 AND rev=?2",
+            SQL2 = "UPDATE doc_bodies SET id=NULL, rev=NULL, body=NULL WHERE id=?1 AND rev=?2",
+            couch_log:info("~n> purge_docs() SQL: ~p ~p id=~p rev=~p~n", [SQL, SQL2, DocId, Rev]),
+
             {ok, Update} = esqlite3:prepare(SQL, Db),
-            ok = esqlite3:bind(Update, [OldFDI#full_doc_info.id]),
-            '$done' = esqlite3:step(Update);
-        ({OldFDI, NewFDI}) ->
+            ok = esqlite3:bind(Update, [DocId, Rev]),
+            '$done' = esqlite3:step(Update),
+
+            {ok, Update2} = esqlite3:prepare(SQL2, Db),
+            ok = esqlite3:bind(Update2, [DocId, Rev]),
+            '$done' = esqlite3:step(Update2);
+        ({_OldFDI, NewFDI}) ->
+            DocId = NewFDI#full_doc_info.id,
+            Database = db_for_doc_id(DocId),
             RevTreeBin = term_to_binary(NewFDI#full_doc_info.rev_tree),
             RevTreeList = base64:encode(?b2l(RevTreeBin)),
-            couch_log:info("~n> RevTreeList: ~p~n", [RevTreeList]),
-            SQL = "UPDATE documents SET revtree=?1 WHERE id=?2 AND latest=1",
+            JsonRev = fdi_to_json_rev(NewFDI),
+            couch_log:info("~n> RevTree: ~p and JsonRev: ~p~n", [NewFDI#full_doc_info.rev_tree, JsonRev]),
+            SQL = "UPDATE " ++ Database ++ " SET revtree=?1 WHERE id=?2 AND rev=?3",
             {ok, Update} = esqlite3:prepare(SQL, Db),
-            ok = esqlite3:bind(Update, [RevTreeList, NewFDI#full_doc_info.id]),
+            ok = esqlite3:bind(Update, [RevTreeList, DocId, JsonRev]),
             '$done' = esqlite3:step(Update)
     end, Pairs),
     lists:foreach(fun (PurgeInfo) -> write_purge_info(Db, PurgeInfo) end, PurgeInfos),
-    SQL1 = "INSERT INTO documents (id, rev, revtree, deleted, latest, purged, local, body) values (NULL, NULL, NULL, NULL, 1, 1, 0, NULL)",
+    SQL1 = "INSERT INTO documents (id, rev, revtree, deleted, purged) values (NULL, NULL, NULL, NULL, 1)",
     couch_log:info("~n> purge_docs() SQL1: ~p~n", [SQL1]),
     ok = esqlite3:exec(SQL1, Db),
+    ok = esqlite3:exec("commit;", Db),
     {ok, State}.
 
 write_purge_info(Db, {PurgeSeq, UUID, DocId, Revs}) ->
@@ -618,25 +923,30 @@ fold_docs_int(Db, UserFun, UserAcc, Options, Type) ->
     couch_log:info("~n> fold_docs(_, _, _, Options: ~p)~n", [Options]),
     IgnoreDeleted = case Type of
         changes -> "";
-        _ -> "AND deleted = 0 "
+        _ -> "AND deleted = 0"
     end,
-    SQL0 = "SELECT id, seq, revtree, rev, body FROM documents WHERE latest = 1 " ++ IgnoreDeleted,
-    LocalSQL = case Type of
-        local -> "AND local = 1 ";
-        _Global -> "AND local != 1 "
+    SQL0 = case Type of
+        local -> "SELECT id, seq, revtree, rev, body FROM local_docs WHERE purged=0 " ++ IgnoreDeleted;
+        _Global -> "SELECT id, seq, revtree, rev FROM documents WHERE purged=0 AND latest=1 " ++ IgnoreDeleted
     end,
+
     AdditionalWhere = case Type of
         changes -> changes_options_to_sql(Options, Type);
         _ -> options_to_sql(Options, Type)
     end,
-    SQL1 = SQL0 ++ LocalSQL ++ AdditionalWhere,
+    SQL1 = SQL0 ++ AdditionalWhere,
     Order = options_to_order_sql(Options, Type),
     SQL = SQL1 ++ Order,
     couch_log:info("~n> fold_docs() SQL: ~p~n", [SQL]),
     Result = esqlite3:q(SQL, Db),
     couch_log:info("~n> fold_docs() Result: ~p~n", [Result]),
     FinalNewUserAcc = try
-        lists:foldl(fun({Id, Seq, RevTree0, Rev, Body}, Acc) ->
+        lists:foldl(fun(Args, Acc) -> % TODO: fold local docs separately
+            Id = element(1, Args),
+            Seq = element(2, Args),
+            RevTree0 = element(3, Args),
+            Rev = element(4, Args),
+
             RevTree = case RevTree0 of
                 undefined -> [];
                 % TODO: hackety hack: split out into separate docs
@@ -644,6 +954,7 @@ fold_docs_int(Db, UserFun, UserAcc, Options, Type) ->
             end,
             FDI = case Type of
                 local ->
+                    Body = element(5, Args),
                     [Pos, RevId] = string:split(?b2l(Rev), "-"),
                     #doc{
                         id = Id,
@@ -725,8 +1036,8 @@ fold_purge_infos(#sqldb{db = Db}, StartSeq, UserFun, UserAcc, Options) ->
     end, [], Result),
     couch_log:info("~n> fold_purge_infos() GroupedPurgeInfos: ~p ~n", [GroupedPurgeInfos]),
     FinalResult = try 
-        lists:foldl(fun(PurgeInfo, UserAcc) ->
-            case UserFun(PurgeInfo, UserAcc) of
+        lists:foldl(fun(PurgeInfo, InUserAcc) ->
+            case UserFun(PurgeInfo, InUserAcc) of
                 {ok, NewUserAcc} -> NewUserAcc;
                 {stop, NewUserAcc} -> throw({stop, NewUserAcc})
             end
@@ -739,21 +1050,24 @@ fold_purge_infos(#sqldb{db = Db}, StartSeq, UserFun, UserAcc, Options) ->
 
 count_changes_since(#sqldb{db = Db}, SinceSeq) ->
     couch_log:info("~n> count_changes_since(~p)~n", [SinceSeq]),
-    SQL = "SELECT COUNT(*) FROM documents WHERE latest = 1",
+    SQL = "SELECT COUNT(*) FROM documents WHERE latest=1",
     [{ChangesSince}] = esqlite3:q(SQL, Db),
     couch_log:info("~n> count_changes_since() -> ChangesSince: ~p~n", [ChangesSince]),
     ChangesSince - SinceSeq.
 
+sql_exec(SQL, Db) ->
+    ok = esqlite3:exec(SQL, Db).
+
 start_compaction(#sqldb{db = Db} = State, DbName, Options, Parent) ->
     couch_log:info("~n> start_compaction(DbName: ~p, Options: ~p)~n", [DbName, Options]),
     Pid = spawn_link(fun() ->
-        SQL = "DELETE FROM documents WHERE latest != 1 OR id = NULL;",
-        ok = esqlite3:exec(SQL, Db),
-        SQL2 = "VACUUM;",
-        ok = esqlite3:exec(SQL2, Db),
+        % TODO: delete old doc bodies (DELETE FROM doc_bodies WHERE (id, rev) IN (SELECT id FROM documents UNION SELECT rev FROM documents))
         PurgeInfosLimit = integer_to_list(get_purge_infos_limit(State)),
-        SQL3 = "DELETE FROM purges WHERE purge_seq NOT IN (SELECT purge_seq FROM purges ORDER BY purge_seq DESC LIMIT " ++ PurgeInfosLimit ++ ")",
-        ok = esqlite3:exec(SQL3, Db),
+        sql_exec("BEGIN", Db),
+        sql_exec("DELETE FROM documents WHERE id = NULL;", Db),
+        sql_exec("DELETE FROM purges WHERE purge_seq NOT IN (SELECT purge_seq FROM purges ORDER BY purge_seq DESC LIMIT " ++ PurgeInfosLimit ++ ")", Db), % TODO use parameter
+        sql_exec("COMMIT", Db),
+        sql_exec("VACUUM", Db),
         gen_server:cast(Parent, {compact_done, ?MODULE, {}})
     end),
     {ok, State, Pid}.

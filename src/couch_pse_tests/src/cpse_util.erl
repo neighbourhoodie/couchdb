@@ -468,11 +468,14 @@ db_props_as_term(Db, Type) ->
 
 
 db_docs_as_term(Db) ->
+    couch_log:info("BEGIN DB_DOCS_AS_TERM>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>", []),
     FoldFun = fun(FDI, Acc) -> {ok, [FDI | Acc]} end,
     {ok, FDIs} = couch_db:fold_docs(Db, FoldFun, [], []),
-    lists:reverse(lists:map(fun(FDI) ->
+    R = lists:reverse(lists:map(fun(FDI) ->
         fdi_to_term(Db, FDI)
-    end, FDIs)).
+    end, FDIs)),
+    couch_log:info("END DB_DOCS_AS_TERM>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>~n~p~n", [R]),
+    R.
 
 
 db_local_docs_as_term(Db, Type) ->

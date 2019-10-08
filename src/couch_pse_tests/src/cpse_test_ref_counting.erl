@@ -55,6 +55,8 @@ cpse_incref_decref({Db, _}) ->
 
 
 cpse_incref_decref_many({Db, _}) ->
+    BaseCount = length(couch_db_engine:monitored_by(Db)),
+
     Clients = lists:map(fun(_) ->
         start_client(Db)
     end, lists:seq(1, ?NUM_CLIENTS)),
@@ -63,12 +65,12 @@ cpse_incref_decref_many({Db, _}) ->
 
     Pids1 = couch_db_engine:monitored_by(Db),
     % +3 for self, db pid, and process tracker
-    ?assertEqual(?NUM_CLIENTS + 3, length(Pids1)),
+    ?assertEqual(?NUM_CLIENTS + BaseCount, length(Pids1)),
 
     lists:foreach(fun(C) -> close_client(C) end, Clients),
 
     Pids2 = couch_db_engine:monitored_by(Db),
-    ?assertEqual(3, length(Pids2)).
+    ?assertEqual(BaseCount, length(Pids2)).
 
 
 start_client(Db0) ->

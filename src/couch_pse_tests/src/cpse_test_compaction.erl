@@ -71,17 +71,18 @@ cpse_compact_with_everything(Db1) ->
     % Add a whole bunch of docs
     DocActions = lists:map(fun(Seq) ->
         {create, {docid(Seq), {[{<<"int">>, Seq}]}}}
-    end, lists:seq(1, 1000)),
+    end, lists:seq(1, 1)),
 
     LocalActions = lists:map(fun(I) ->
         {create, {local_docid(I), {[{<<"int">>, I}]}}}
-    end, lists:seq(1, 25)),
+    end, lists:seq(1, 1)),
 
     Actions1 = DocActions ++ LocalActions,
 
     {ok, Db2} = cpse_util:apply_batch(Db1, Actions1),
+
     ok = couch_db:set_security(Db1, {[{<<"foo">>, <<"bar">>}]}),
-    ok = couch_db:set_revs_limit(Db1, 500),
+    ok = couch_db:set_revs_limit(Db1, 1),
 
     Actions2 = [
         {create, {<<"foo">>, {[]}}},
@@ -149,6 +150,7 @@ cpse_compact_with_everything(Db1) ->
     Term2 = cpse_util:db_as_term(Db7),
 
     Diff = cpse_util:term_diff(Term1, Term2),
+
     ?assertEqual(nodiff, Diff).
 
 
