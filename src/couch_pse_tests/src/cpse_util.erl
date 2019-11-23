@@ -19,18 +19,18 @@
 
 
 -define(TEST_MODULES, [
-    cpse_test_open_close_delete,
-    cpse_test_get_set_props,
-    cpse_test_read_write_docs,
-    % % cpse_test_attachments, % and stay out
-    cpse_test_fold_docs,
-    cpse_test_fold_changes,
-    cpse_test_fold_purge_infos,
-    cpse_test_purge_docs,
-    cpse_test_purge_replication,
-    cpse_test_purge_bad_checkpoints,
-    cpse_test_compaction,
-    cpse_test_ref_counting
+    % cpse_test_open_close_delete,
+    % cpse_test_get_set_props,
+    % cpse_test_read_write_docs,
+    cpse_test_attachments%, % and stay out
+    % cpse_test_fold_docs,
+    % cpse_test_fold_changes,
+    % cpse_test_fold_purge_infos,
+    % cpse_test_purge_docs,
+    % cpse_test_purge_replication,
+    % cpse_test_purge_bad_checkpoints,
+    % cpse_test_compaction,
+    % cpse_test_ref_counting
 ]).
 
 

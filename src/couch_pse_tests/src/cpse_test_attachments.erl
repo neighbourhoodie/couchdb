@@ -38,15 +38,17 @@ cpse_write_attachment(Db1) ->
         {stream, Stream} = couch_att:fetch(data, Att0),
         ?assertEqual(true, couch_db_engine:is_active_stream(Db1, Stream)),
 
-        Actions = [{create, {<<"first">>, {[]}, [Att0]}}],
+        Actions = [{create, {<<"first">>, {[{<<"a">>,1}]}, [Att0]}}],
         {ok, Db2} = cpse_util:apply_actions(Db1, Actions),
         {ok, _} = couch_db:ensure_full_commit(Db2),
         cpse_util:shutdown_db(Db2),
+        ?debugFmt("~nDb2: ~p~n", [Db2]),
 
         {ok, Db3} = couch_db:reopen(Db2),
+        ?debugFmt("~nDb3: ~p~n", [Db3]),
 
         [FDI] = couch_db_engine:open_docs(Db3, [<<"first">>]),
-
+        ?debugFmt("~nFDI: ~p~n", [FDI]),
         #rev_info{
             rev = {RevPos, PrevRevId},
             deleted = Deleted,

@@ -206,6 +206,14 @@
 % ## Purging
 % ## Metadata
 %
+% ## Future Features
+% - document deconstruction
+%   - SQL queries?
+% - doc body deduplication across multiple databases
+%   - needs ATTACH and refcounting
+%
+%
+%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 -module(couch_sqlite_engine).
@@ -281,7 +289,8 @@
   epochs_flushed = false, % set to true after next write
   last_activity = 0,
   monitor = nil,
-  pid = nil
+  pid = nil,
+  att_fd = nil
 }).
 
 -define(DISK_VERSION, 1).
@@ -307,13 +316,23 @@ exists(FilePath) ->
     filelib:is_file(FilePath).
     
 
-delete(_RootDir, FilePath, _Async) -> file:delete(FilePath).
+delete(RootDir, FilePath, _Async) -> % TODO: windows
+    % file:delete(FilePath),
+    case couch_file:delete(RootDir, db_path_to_att_path(FilePath)) of
+        {error, Reason} ->
+            case Reason of
+                enoent -> ok;
+                _ -> throw(Reason)
+            end;
+        ok -> ok
+    end.
 % delete(_RootDir, FilePath, _Async) -> ok. % uncomment to debug sqlite file after test run
 
 delete_compaction_files(_RootDir, _FilePath, _DelOpts) -> ok.
 
 init(FilePath, _Options) ->
     couch_log:info("~n> init(FilePath: ~p)~n", [FilePath]),
+    ok = filelib:ensure_dir(FilePath),
     {ok, Db} = esqlite3:open(FilePath),
     ok = esqlite3:exec("PRAGMA journal_mode=WAL;", Db),
     Meta = "CREATE TABLE IF NOT EXISTS meta ("
@@ -377,14 +396,30 @@ init(FilePath, _Options) ->
         ok = esqlite3:exec(IdxDef, Db)
     end, DocumentsIndexes ++ DocBodyIndexes ++ LocalDocumentsIndexes ++ PurgeIndexes),
     % TODO Attachments = "CREATE TABLE attachments ()"
-    State = init_state(Db),
+    State = init_state(Db, FilePath),
     case load_meta(uuid, Db) of
         undefined -> init_uuid(Db);
         _Else -> ok
     end,
     {ok, State}.
 
-init_state(Db) ->
+db_path_to_att_path(FilePath) ->
+    DbName = filename:basename(FilePath, ".sqlite"),
+    DbPath = filename:dirname(FilePath),
+    AttFileName = DbName ++ ".att",
+    AttPath = filename:join(DbPath, AttFileName),
+    AttPath.
+
+init_attachment_file(FilePath) ->
+    AttPath = db_path_to_att_path(FilePath),
+    Options = case filelib:is_file(AttPath) of
+        false -> [create, read, append];
+        _ -> [read, append]
+    end,
+    {ok, AttFile} = couch_file:open(AttPath, Options),
+    AttFile.
+
+init_state(Db, FilePath) ->
     ok = init_security(Db),
     {UpateEpochs, Epochs} = init_epochs(Db),
     #sqldb {
@@ -393,7 +428,8 @@ init_state(Db) ->
        epochs = Epochs,
        last_activity = os:timestamp(),
        pid = self(),
-       monitor = nil
+       monitor = nil,
+       att_fd = init_attachment_file(FilePath)
     }.
 
 init_security(Db) ->
@@ -432,7 +468,7 @@ init_uuid(Db) ->
     SQL = "INSERT INTO meta (key, value) VALUES (?1, ?2);",
     {ok, Insert} = esqlite3:prepare(SQL, Db),
     ok = esqlite3:bind(Insert, ["uuid", UUID]),
-    '$done' = esqlite3:step(Insert).
+    '$done' = esqlite3:step(Insert).%
 
 maybe_update_epochs(#sqldb{ update_epochs = false} = State) -> State;
 maybe_update_epochs(#sqldb{ db = Db, epochs = [{Node, Seq} | _RestEpochs]} = State) ->
@@ -443,9 +479,10 @@ maybe_update_epochs(#sqldb{ db = Db, epochs = [{Node, Seq} | _RestEpochs]} = Sta
     '$done' = esqlite3:step(Insert),
     State#sqldb{update_epochs = false}.
 
-terminate(Reason, #sqldb{db = Db}) ->
+terminate(Reason, #sqldb{db = Db, att_fd = Fd}) ->
     couch_log:info("~n> terminate(Reason: ~p)~n", [Reason]),
-    ok = esqlite3:close(Db).
+    ok = esqlite3:close(Db),
+    ok = file:close(Fd).
     
 handle_db_updater_call(Msg, State) ->
     couch_log:info("~n> handle_db_updater_call(~p) ~n", [Msg]),
@@ -502,6 +539,7 @@ write_meta(Key, Value, Db) when is_list(Key) ->
 write_meta(_Key, _Value, _Db) ->
     throw({error, sqlite_engine_invalid_meta_write_key}).
 
+parse_meta("revs_limit", Value) -> list_to_integer(binary_to_list(Value));
 parse_meta("purge_infos_limit", Value) -> list_to_integer(binary_to_list(Value));
 parse_meta(_, Value) -> Value.
 
@@ -565,6 +603,7 @@ get_oldest_purge_seq(#sqldb{db = Db}) ->
 get_purge_infos_limit(#sqldb{db = Db}) ->
     couch_log:info("~n> get_purge_infos_limit()~n", []),
     load_meta(purge_infos_limit, 10, Db).
+
 get_revs_limit(#sqldb{db = Db}) ->
     couch_log:info("~n> get_revs_limit()~n", []),
     binary_to_integer(load_meta(revs_limit, <<"1000">>, Db)).
@@ -746,9 +785,9 @@ serialize_doc(_Db, Doc) ->
     couch_log:info("~n> serialize_doc(~p)~n", [Doc]),
     Doc.
 
-write_doc_body(#sqldb{db = Db}, #doc{id=Id, revs={Start, RevIds}}=Doc) ->
+write_doc_body(#sqldb{db = Db}, #doc{id=Id, revs={Start, RevIds}, body=Body}=Doc) ->
     couch_log:info("~n> write_doc_body(~p)~n", [Doc]),
-    JsonDoc = couch_util:json_encode(couch_doc:to_json_obj(Doc, [])),
+    JsonDoc = couch_util:json_encode(Body),
     [{_, JsonRevs}] = couch_doc:to_json_rev(Start, RevIds),
 
     couch_log:info("~n> JsonRevs: ~p~n", [JsonRevs]),
@@ -882,19 +921,34 @@ write_purge_info(Db, PurgeSeq, UUID, DocId, {Start, Rev}) ->
     '$done' = esqlite3:step(Insert),
     ok.
 
-commit_data(State) ->
+commit_data(#sqldb{att_fd = Fd}=State) ->
     couch_log:info("~n> commit_data()~n", []),
+    ok = couch_file:sync(Fd),
+    {ok, State};
+commit_data(State) ->
     {ok, State}.
+    
 
-open_write_stream(_Db, Options) ->
-    couch_log:info("~n> open_write_stream(Options)~n", [Options]),
-    throw(not_supported).
-open_read_stream(_Db, _Stream) ->
-    couch_log:info("~n> open_read_stream()~n", []),
-    throw(not_supported).
-is_active_stream(_Db, _Stream) ->
-    couch_log:info("~n> is_active_stream()~n", []),
+open_write_stream(#sqldb{} = St, Options) ->
+    couch_stream:open({couch_bt_engine_stream, {St#sqldb.att_fd, []}}, Options).
+
+open_read_stream(#sqldb{} = St, StreamSt) ->
+    {ok, {couch_bt_engine_stream, {St#sqldb.att_fd, StreamSt}}}.
+
+is_active_stream(#sqldb{} = St, {couch_bt_engine_stream, {Fd, _}}) ->
+    St#sqldb.att_fd == Fd;
+is_active_stream(_, _) ->
     false.
+
+% open_write_stream(_Db, Options) ->
+%     couch_log:info("~n> open_write_stream(Options: ~p)~n", [Options]),
+%     throw(not_supported).
+% open_read_stream(_Db, _Stream) ->
+%     couch_log:info("~n> open_read_stream()~n", []),
+%     throw(not_supported).
+% is_active_stream(_Db, _Stream) ->
+%     couch_log:info("~n> is_active_stream()~n", []),
+%     false.
 
 % This function is called to fold over the documents in
 % the database sorted by the raw byte collation order of
