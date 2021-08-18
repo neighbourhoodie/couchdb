@@ -27,6 +27,13 @@ go(DbName, AllDocs0, Opts) ->
     Options = lists:delete(all_or_nothing, Opts),
     GroupedDocs = lists:map(fun({#shard{name=Name, node=Node} = Shard, Docs}) ->
         Docs1 = untag_docs(Docs),
+        LogDocs = [Doc || Doc <- Docs1, Doc#doc.id == <<"test-doc">>],
+        lists:foreach(fun(Doc) ->
+            couch_log:error(
+                "[DIAGNOSTIC fabric_doc_update:go]~n    sending to: node = ~p, name = ~p",
+                [Node, Name]),
+            couch_db:log_attachments("fabric_doc_update:go", Doc)
+        end, LogDocs),
         Ref = rexi:cast(Node, {fabric_rpc, update_docs, [Name,Docs1,Options]}),
         {Shard#shard{ref=Ref}, Docs}
     end, group_docs_by_shard(DbName, AllDocs)),
@@ -72,6 +79,7 @@ handle_message(attachment_chunk_received, _Worker, Acc0) ->
 handle_message({ok, Replies}, Worker, Acc0) ->
     {WaitingCount, DocCount, W, GroupedDocs, DocReplyDict0} = Acc0,
     {value, {_, Docs}, NewGrpDocs} = lists:keytake(Worker, 1, GroupedDocs),
+    log_interesting_docs(Worker, Docs, Replies),
     DocReplyDict = append_update_replies(Docs, Replies, DocReplyDict0),
     case {WaitingCount, dict:size(DocReplyDict)} of
     {1, _} ->
@@ -100,6 +108,19 @@ handle_message({bad_request, Msg}, _, _) ->
     throw({bad_request, Msg});
 handle_message({request_entity_too_large, Entity}, _, _) ->
     throw({request_entity_too_large, Entity}).
+
+
+log_interesting_docs(Worker, [#doc{id = <<"test-doc">>, meta = Meta} | Docs], [Reply | Replies]) ->
+    #shard{name = Name, node = Node, dbname = DbName} = Worker,
+    couch_log:error(
+        "[DIAGNOSTIC fabric_doc_update:handle_message]~n    shard: node = ~p, name = ~p, dbname = ~p~n    reply = ~p~n    doc meta = ~p",
+        [Node, Name, DbName, Reply, Meta]),
+    log_interesting_docs(Worker, Docs, Replies);
+log_interesting_docs(Worker, [_|Docs], [_|Replies]) ->
+    log_interesting_docs(Worker, Docs, Replies);
+log_interesting_docs(_, _, []) ->
+    ok.
+
 
 before_doc_update(DbName, Docs, Opts) ->
     case {fabric_util:is_replicator_db(DbName), fabric_util:is_users_db(DbName)} of

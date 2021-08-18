@@ -276,6 +276,7 @@ update_docs(DbName, Docs0, Options) ->
             end,
             {Docs0, X}
     end,
+    couch_db:log_interesting_docs(Type, before_make_att_readers, [Docs1]),
     Docs2 = make_att_readers(Docs1),
     with_db(DbName, Options, {couch_db, update_docs, [Docs2, Options, Type]}).
 

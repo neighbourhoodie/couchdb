@@ -95,6 +95,9 @@
     update_docs/3,
     delete_doc/3,
 
+    log_interesting_docs/3,
+    log_attachments/2,
+
     purge_docs/2,
     purge_docs/3,
 
@@ -1192,8 +1195,11 @@ update_docs(Db, Docs0, Options, replicated_changes) ->
     {ok, DocBuckets, NonRepDocs, DocErrors}
         = before_docs_update(Db, Docs, PrepValidateFun, replicated_changes),
 
+    log_interesting_docs(replicated_changes, before_flush, DocBuckets),
+
     DocBuckets2 = [[doc_flush_atts(Db, check_dup_atts(Doc))
             || Doc <- Bucket] || Bucket <- DocBuckets],
+    log_interesting_docs(replicated_changes, after_flush, DocBuckets2),
     {ok, _} = write_and_commit(Db, DocBuckets2,
         NonRepDocs, [merge_conflicts | Options]),
     {ok, DocErrors};
@@ -1222,12 +1228,13 @@ update_docs(Db, Docs0, Options, interactive_edit) ->
     true ->
         Options2 = if AllOrNothing -> [merge_conflicts];
                 true -> [] end ++ Options,
+        log_interesting_docs(interactive_edit, before_flush, DocBuckets),
         DocBuckets2 = [[
                 doc_flush_atts(Db, set_new_att_revpos(
                         check_dup_atts(Doc)))
                 || Doc <- B] || B <- DocBuckets],
         {DocBuckets3, IdRevs} = new_revs(DocBuckets2, [], []),
-
+        log_interesting_docs(interactive_edit, after_flush, DocBuckets3),
         {ok, CommitResults} = write_and_commit(Db, DocBuckets3,
             NonRepDocs, Options2),
 
@@ -1238,6 +1245,37 @@ update_docs(Db, Docs0, Options, interactive_edit) ->
             dict:fetch(doc_tag(Doc), ResultsDict)
         end, Docs)}
     end.
+
+
+log_interesting_docs(UpdateType, EventType, DocBuckets) ->
+    Docs = [Doc || Docs <- DocBuckets, Doc <- Docs, Doc#doc.id == <<"test-doc">>],
+
+    lists:foreach(fun(Doc) ->
+        #doc{revs = {Pos, Hashes}} = Doc,
+
+        {OldRev, NewRev} = case Hashes of
+            [] -> {none, none};
+            [Fst] -> {none, {Pos, Fst}};
+            [Fst, Snd | _] -> {{Pos - 1, Snd}, {Pos, Fst}}
+        end,
+
+        couch_log:error(
+            "[DIAGNOSTIC couch_db:update_docs(~p, ~p)]~n    rev: ~p --> ~p",
+            [UpdateType, EventType, OldRev, NewRev]),
+
+        log_attachments(io_lib:format("couch_db:update_docs(~p, ~p)", [UpdateType, EventType]), Doc)
+    end, Docs).
+
+
+log_attachments(Msg, Doc) ->
+    couch_log:error("[DIAGNOSTIC ~s]~n    doc meta = ~p", [Msg, Doc#doc.meta]),
+    lists:foreach(fun(Att) ->
+        {att, Name, Type, ALen, DLen, Md5, Revpos, Data, Encoding} = Att,
+        couch_log:error(
+            "[DIAGNOSTIC ~s]~n    att: name = ~p, type = ~p, revpos = ~p~n         att_len = ~p, disk_len = ~p, md5 = ~p~n         encoding = ~p, data = ~p",
+            [Msg, Name, Type, Revpos, ALen, DLen, Md5, Encoding, Data])
+    end, Doc#doc.atts).
+
 
 % Returns the first available document on disk. Input list is a full rev path
 % for the doc.
