@@ -1053,6 +1053,10 @@ db_doc_req(#httpd{method='PUT', user_ctx=Ctx}=Req, Db, DocId) ->
     RespHeaders = [{"Location", Loc}],
     case couch_util:to_list(couch_httpd:header_value(Req, "Content-Type")) of
     ("multipart/related;" ++ _) = ContentType ->
+        couch_log:error(
+            "~nDEBUG [chttpd_db:db_doc_req] db = ~p, dbname = ~p, docid = ~p, mem3:quorum = ~p, w = ~p, mem3:dbname = ~p, mem3:n = ~p~n",
+            [Db, DbName, DocId, mem3:quorum(Db), W, mem3:dbname(DbName), mem3:n(mem3:dbname(DbName), DocId)]
+        ),
         couch_httpd:check_max_request_length(Req),
         couch_httpd_multipart:num_mp_writers(mem3:n(mem3:dbname(DbName), DocId)),
         {ok, Doc0, WaitFun, Parser} = couch_doc:doc_from_multi_part_stream(ContentType,
@@ -1255,7 +1259,9 @@ bulk_get_multipart_boundary() ->
     <<"--", Unique/binary>>.
 
 receive_request_data(Req) ->
-    receive_request_data(Req, chttpd:body_length(Req)).
+    Length = chttpd:body_length(Req),
+    couch_log:error("~nDEBUG [couch_httpd_db:receive_request_data] length = ~p~n", [Length]),
+    receive_request_data(Req, Length).
 
 receive_request_data(Req, Len) when Len == chunked ->
     Ref = make_ref(),
@@ -1268,6 +1274,7 @@ receive_request_data(Req, Len) when Len == chunked ->
 
 receive_request_data(Req, LenLeft) when LenLeft > 0 ->
     Len = erlang:min(4096, LenLeft),
+    couch_log:error("~nDEBUG [couch_httpd_db:receive_request_data] len = ~p, lenleft = ~p~n", [Len, LenLeft]),
     Data = chttpd:recv(Req, Len),
     {Data, fun() -> receive_request_data(Req, LenLeft - iolist_size(Data)) end};
 receive_request_data(_Req, _) ->

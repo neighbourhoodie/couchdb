@@ -465,7 +465,9 @@ doc_from_multi_part_stream(ContentType, DataFun, Ref) ->
     doc_from_multi_part_stream(ContentType, DataFun, Ref, true).
 
 doc_from_multi_part_stream(ContentType, DataFun, Ref, ValidateDocLimits) ->
-    case couch_httpd_multipart:decode_multipart_stream(ContentType, DataFun, Ref) of
+    Response = couch_httpd_multipart:decode_multipart_stream(ContentType, DataFun, Ref),
+    couch_log:error("~nDEBUG [couch_doc:doc_from_multi_part_stream] response = ~p~n", [Response]),
+    case Response of
     {{started_open_doc_revs, NewRef}, Parser, _ParserRef} ->
         restart_open_doc_revs(Parser, Ref, NewRef);
     {{doc_bytes, Ref, DocBytes}, Parser, ParserRef} ->

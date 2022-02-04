@@ -26,6 +26,7 @@
 decode_multipart_stream(ContentType, DataFun, Ref) ->
     Parent = self(),
     NumMpWriters = num_mp_writers(),
+    couch_log:error("~nDEBUG [couch_httpd_multipart:decode_multipart_stream] num_mp_writers = ~p~n", [NumMpWriters]),
     {Parser, ParserRef} = spawn_monitor(fun() ->
         ParentRef = erlang:monitor(process, Parent),
         put(mp_parent_ref, ParentRef),
@@ -38,17 +39,22 @@ decode_multipart_stream(ContentType, DataFun, Ref) ->
     Parser ! {get_doc_bytes, Ref, self()},
     receive
     {started_open_doc_revs, NewRef} ->
+        couch_log:error("~nDEBUG [couch_httpd_multipart:decode_multipart_stream] started_open_doc_revs~n", []),
         %% FIXME: How to remove the knowledge about this message?
         {{started_open_doc_revs, NewRef}, Parser, ParserRef};
     {doc_bytes, Ref, DocBytes}  ->
+        couch_log:error("~nDEBUG [couch_httpd_multipart:decode_multipart_stream] doc_bytes~n", []),
         {{doc_bytes, Ref, DocBytes}, Parser, ParserRef};
     {'DOWN', ParserRef, _, _, normal} ->
+        couch_log:error("~nDEBUG [couch_httpd_multipart:decode_multipart_stream] DOWN (normal)~n", []),
         ok;
     {'DOWN', ParserRef, process, Parser, {{nocatch, {Error, Msg}}, _}} ->
+        couch_log:error("~nDEBUG [couch_httpd_multipart:decode_multipart_stream] DOWN (process) ~p~n", [{Error, Msg}]),
         couch_log:error("Multipart streamer ~p died with reason ~p",
                         [ParserRef, Msg]),
         throw({Error, Msg});
     {'DOWN', ParserRef, _, _, Reason} ->
+        couch_log:error("~nDEBUG [couch_httpd_multipart:decode_multipart_stream] DOWN ~p~n", [Reason]),
         couch_log:error("Multipart streamer ~p died with reason ~p",
                         [ParserRef, Reason]),
         throw({error, Reason})
@@ -56,7 +62,9 @@ decode_multipart_stream(ContentType, DataFun, Ref) ->
 
 
 mp_parse_doc({headers, H}, []) ->
-    case couch_util:get_value("content-type", H) of
+    Type = couch_util:get_value("content-type", H),
+    couch_log:error("~nDEBUG [couch_httpd_multipart:mp_parse_doc > headers] type = ~p~n", [Type]),
+    case Type of
     {"application/json", _} ->
         fun (Next) ->
             mp_parse_doc(Next, [])
@@ -65,11 +73,14 @@ mp_parse_doc({headers, H}, []) ->
         throw({bad_ctype, <<"Content-Type must be application/json">>})
     end;
 mp_parse_doc({body, Bytes}, AccBytes) ->
+    couch_log:error("~nDEBUG [couch_httpd_multipart:mp_parse_doc > body]~n", []),
     fun (Next) ->
         mp_parse_doc(Next, [Bytes | AccBytes])
     end;
 mp_parse_doc(body_end, AccBytes) ->
+    couch_log:error("~nDEBUG [couch_httpd_multipart:mp_parse_doc > body_end]~n", []),
     receive {get_doc_bytes, Ref, From} ->
+        couch_log:error("~nDEBUG [couch_httpd_multipart:mp_parse_doc > body_end] received get_doc_bytes~n", []),
         From ! {doc_bytes, Ref, lists:reverse(AccBytes)}
     end,
     fun(Next) ->
@@ -77,46 +88,63 @@ mp_parse_doc(body_end, AccBytes) ->
     end.
 
 mp_parse_atts({headers, _}, Acc) ->
+    couch_log:error("~nDEBUG [couch_httpd_multipart:mp_parse_atts > headers]~n", []),
     fun(Next) -> mp_parse_atts(Next, Acc) end;
 mp_parse_atts(body_end, Acc) ->
+    couch_log:error("~nDEBUG [couch_httpd_multipart:mp_parse_atts > body_end]~n", []),
     fun(Next) -> mp_parse_atts(Next, Acc) end;
 mp_parse_atts({body, Bytes}, {Ref, Chunks, Offset, Counters, Waiting}) ->
+    couch_log:error("~nDEBUG [couch_httpd_multipart:mp_parse_atts > body] offset = ~p, counters = ~p, waiting = ~p~n", [Offset, Counters, Waiting]),
     case maybe_send_data({Ref, Chunks++[Bytes], Offset, Counters, Waiting}) of
         abort_parsing ->
+            couch_log:error("~nDEBUG [couch_httpd_multipart:mp_parse_atts > body] abort_parsing~n", []),
             fun(Next) -> mp_abort_parse_atts(Next, nil) end;
         NewAcc ->
+            couch_log:error("~nDEBUG [couch_httpd_multipart:mp_parse_atts > body] NewAcc~n", []),
             fun(Next) -> mp_parse_atts(Next, NewAcc) end
     end;
 mp_parse_atts(eof, {Ref, Chunks, Offset, Counters, Waiting}) ->
     N = num_mp_writers(),
     M = length(Counters),
+    couch_log:error("~nDEBUG [couch_httpd_multipart:mp_parse_atts > eof] offset = ~p, counters = ~p, waiting = ~p, num_mp_writers = ~p, m = ~p~n", [Offset, Counters, Waiting, N, M]),
     case (M == N) andalso Chunks == [] of
     true ->
+        couch_log:error("~nDEBUG [couch_httpd_multipart:mp_parse_atts > eof] done~n", []),
         ok;
     false ->
+        couch_log:error("~nDEBUG [couch_httpd_multipart:mp_parse_atts > eof] not done~n", []),
         ParentRef = get(mp_parent_ref),
         receive
         abort_parsing ->
+            couch_log:error("~nDEBUG [couch_httpd_multipart:mp_parse_atts > eof] not done -> abort_parsing~n", []),
             ok;
         {get_bytes, Ref, From} ->
+            couch_log:error("~nDEBUG [couch_httpd_multipart:mp_parse_atts > eof] not done -> get_bytes~n", []),
             C2 = update_writer(From, Counters),
             case maybe_send_data({Ref, Chunks, Offset, C2, [From|Waiting]}) of
                 abort_parsing ->
+                    couch_log:error("~nDEBUG [couch_httpd_multipart:mp_parse_atts > eof] not done -> get_bytes -> abort_parsing~n", []),
                     ok;
                 NewAcc ->
+                    couch_log:error("~nDEBUG [couch_httpd_multipart:mp_parse_atts > eof] not done -> get_bytes -> NewAcc~n", []),
                     mp_parse_atts(eof, NewAcc)
             end;
         {'DOWN', ParentRef, _, _, _} ->
+            couch_log:error("~nDEBUG [couch_httpd_multipart:mp_parse_atts > eof] not done -> DOWN (parent)~n", []),
             exit(mp_reader_coordinator_died);
         {'DOWN', WriterRef, _, WriterPid, _} ->
+            couch_log:error("~nDEBUG [couch_httpd_multipart:mp_parse_atts > eof] not done -> DOWN (writer)~n", []),
             case remove_writer(WriterPid, WriterRef, Counters) of
                 abort_parsing ->
+                    couch_log:error("~nDEBUG [couch_httpd_multipart:mp_parse_atts > eof] not done -> DOWN (writer) -> abort_parsing~n", []),
                     ok;
                 C2 ->
+                    couch_log:error("~nDEBUG [couch_httpd_multipart:mp_parse_atts > eof] not done -> DOWN (writer) -> C2~n", []),
                     NewAcc = {Ref, Chunks, Offset, C2, Waiting -- [WriterPid]},
                     mp_parse_atts(eof, NewAcc)
             end
         after 300000 ->
+            couch_log:error("~nDEBUG [couch_httpd_multipart:mp_parse_atts > eof] receive timed out~n", []),
             ok
         end
     end.
@@ -127,10 +155,13 @@ mp_abort_parse_atts(_, _) ->
     fun(Next) -> mp_abort_parse_atts(Next, nil) end.
 
 maybe_send_data({Ref, Chunks, Offset, Counters, Waiting}) ->
+    couch_log:error("~nDEBUG [couch_httpd_multipart:maybe_send_data] offset = ~p, counters = ~p, waiting = ~p~n", [Offset, Counters, Waiting]),
     receive {get_bytes, Ref, From} ->
+        couch_log:error("~nDEBUG [couch_httpd_multipart:maybe_send_data] received get_bytes~n", []),
         NewCounters = update_writer(From, Counters),
         maybe_send_data({Ref, Chunks, Offset, NewCounters, [From|Waiting]})
     after 0 ->
+        couch_log:error("~nDEBUG [couch_httpd_multipart:maybe_send_data] no get_bytes in mailbox~n", []),
         % reply to as many writers as possible
         NewWaiting = lists:filter(fun(Writer) ->
             {_, WhichChunk} = orddict:fetch(Writer, Counters),
@@ -142,6 +173,7 @@ maybe_send_data({Ref, Chunks, Offset, Counters, Waiting}) ->
                 true
             end
         end, Waiting),
+        couch_log:error("~nDEBUG [couch_httpd_multipart:maybe_send_data] waiting: ~p ==> ~p~n", [Waiting, NewWaiting]),
 
         % check if we can drop a chunk from the head of the list
         SmallestIndex = case Counters of
@@ -162,29 +194,42 @@ maybe_send_data({Ref, Chunks, Offset, Counters, Waiting}) ->
 
         % we should wait for a writer if no one has written the last chunk
         LargestIndex = lists:max([0] ++ [C || {_WPid, {_WRef, C}} <- Counters]),
+        couch_log:error(
+            "~nDEBUG [couch_httpd_multipart:maybe_send_data] smallest index = ~p, size = ~p, num_mp_writers = ~p, offset = ~p, new offset = ~p, largest index = ~p~n",
+            [SmallestIndex, Size, N, Offset, NewOffset, LargestIndex]
+        ),
         if LargestIndex  >= (Offset + length(Chunks)) ->
             % someone has written all possible chunks, keep moving
+            couch_log:error("~nDEBUG [couch_httpd_multipart:maybe_send_data] done~n", []),
             {Ref, NewChunks, NewOffset, Counters, NewWaiting};
         true ->
+            couch_log:error("~nDEBUG [couch_httpd_multipart:maybe_send_data] not done~n", []),
             ParentRef = get(mp_parent_ref),
             receive
             abort_parsing ->
+                couch_log:error("~nDEBUG [couch_httpd_multipart:maybe_send_data] not done -> abort_parsing~n", []),
                 abort_parsing;
             {'DOWN', ParentRef, _, _, _} ->
+                couch_log:error("~nDEBUG [couch_httpd_multipart:maybe_send_data] not done -> DOWN (parent)~n", []),
                 exit(mp_reader_coordinator_died);
             {'DOWN', WriterRef, _, WriterPid, _} ->
+                couch_log:error("~nDEBUG [couch_httpd_multipart:maybe_send_data] not done -> DOWN (writer)~n", []),
                 case remove_writer(WriterPid, WriterRef, Counters) of
                     abort_parsing ->
+                        couch_log:error("~nDEBUG [couch_httpd_multipart:maybe_send_data] not done -> DOWN (writer) -> abort_parsing~n", []),
                         abort_parsing;
                     C2 ->
+                        couch_log:error("~nDEBUG [couch_httpd_multipart:maybe_send_data] not done -> DOWN (writer) -> C2~n", []),
                         RestWaiting = NewWaiting -- [WriterPid],
                         NewAcc = {Ref, NewChunks, NewOffset, C2, RestWaiting},
                         maybe_send_data(NewAcc)
                 end;
             {get_bytes, Ref, X} ->
+                couch_log:error("~nDEBUG [couch_httpd_multipart:maybe_send_data] not done -> get_bytes~n", []),
                 C2 = update_writer(X, Counters),
                 maybe_send_data({Ref, NewChunks, NewOffset, C2, [X|NewWaiting]})
             after 300000 ->
+                couch_log:error("~nDEBUG [couch_httpd_multipart:maybe_send_data] receive timed out~n", []),
                 abort_parsing
             end
         end
