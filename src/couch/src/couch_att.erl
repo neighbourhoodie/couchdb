@@ -534,14 +534,17 @@ flush(Db, Att) ->
 
 
 flush_data(Db, Data, Att) when is_binary(Data) ->
+    couch_log:error("~nDEBUG [couch_att:flush_data] binary~n", []),
     couch_db:with_stream(Db, Att, fun(OutputStream) ->
         couch_stream:write(OutputStream, Data)
     end);
 flush_data(Db, Fun, Att) when is_function(Fun) ->
+    couch_log:error("~nDEBUG [couch_att:flush_data] fun~n", []),
     AttName = fetch(name, Att),
     MaxAttSize = max_attachment_size(),
     case fetch(att_len, Att) of
         undefined ->
+            couch_log:error("~nDEBUG [couch_att:flush_data] length: undefined~n", []),
             couch_db:with_stream(Db, Att, fun(OutputStream) ->
                 % Fun(MaxChunkSize, WriterFun) must call WriterFun
                 % once for each chunk of the attachment,
@@ -566,6 +569,7 @@ flush_data(Db, Fun, Att) when is_function(Fun) ->
                     end, 0)
             end);
         AttLen ->
+            couch_log:error("~nDEBUG [couch_att:flush_data] length: ~p~n", [AttLen]),
             validate_attachment_size(AttName, AttLen, MaxAttSize),
             couch_db:with_stream(Db, Att, fun(OutputStream) ->
                 write_streamed_attachment(OutputStream, Fun, AttLen)
@@ -602,21 +606,27 @@ flush_data(Db, {stream, StreamEngine}, Att) ->
 
 
 write_streamed_attachment(_Stream, _F, 0) ->
+    couch_log:error("~nDEBUG [couch_att:write_streamed_attachment] 0~n", []),
     ok;
 write_streamed_attachment(_Stream, _F, LenLeft) when LenLeft < 0 ->
+    couch_log:error("~nDEBUG [couch_att:write_streamed_attachment] left = ~p~n", [LenLeft]),
     throw({bad_request, <<"attachment longer than expected">>});
 write_streamed_attachment(Stream, F, LenLeft) when LenLeft > 0 ->
+    couch_log:error("~nDEBUG [couch_att:write_streamed_attachment] left = ~p~n", [LenLeft]),
     Bin = try read_next_chunk(F, LenLeft)
     catch
         {mp_parser_died, normal} ->
+            couch_log:error("~nDEBUG [couch_att:write_streamed_attachment] mp_parser_died~n", []),
             throw({bad_request, <<"attachment shorter than expected">>})
     end,
     ok = couch_stream:write(Stream, Bin),
     write_streamed_attachment(Stream, F, LenLeft - iolist_size(Bin)).
 
 read_next_chunk(F, _) when is_function(F, 0) ->
+    couch_log:error("~nDEBUG [couch_att:read_next_chunk] fun/0~n", []),
     F();
 read_next_chunk(F, LenLeft) when is_function(F, 1) ->
+    couch_log:error("~nDEBUG [couch_att:read_next_chunk] fun/1~n", []),
     F(lists:min([LenLeft, 16#2000])).
 
 

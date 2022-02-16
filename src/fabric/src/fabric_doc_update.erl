@@ -35,12 +35,15 @@ go(DbName, AllDocs0, Opts) ->
     W = couch_util:get_value(w, Options, integer_to_list(mem3:quorum(DbName))),
     Acc0 = {length(Workers), length(AllDocs), list_to_integer(W), GroupedDocs,
         dict:new()},
+    couch_log:error("~nDEBUG [fabric_doc_update:go] w = ~p, acc0 = ~p~n", [W, Acc0]),
     Timeout = fabric_util:request_timeout(),
     try rexi_utils:recv(Workers, #shard.ref, fun handle_message/3, Acc0, infinity, Timeout) of
     {ok, {Health, Results}}
             when Health =:= ok; Health =:= accepted; Health =:= error ->
+        couch_log:error("~nDEBUG [fabric_doc_update:go] ok, health = ~p, results = ~p~n", [Health, Results]),
         {Health, [R || R <- couch_util:reorder_results(AllDocs, Results), R =/= noreply]};
     {timeout, Acc} ->
+        couch_log:error("~nDEBUG [fabric_doc_update:go] timeout = ~p~n", [Acc]),
         {_, _, W1, GroupedDocs1, DocReplDict} = Acc,
         {DefunctWorkers, _} = lists:unzip(GroupedDocs1),
         fabric_util:log_timeout(DefunctWorkers, "update_docs"),
@@ -48,31 +51,38 @@ go(DbName, AllDocs0, Opts) ->
             DocReplDict),
         {Health, [R || R <- couch_util:reorder_results(AllDocs, Resp), R =/= noreply]};
     Else ->
+        couch_log:error("~nDEBUG [fabric_doc_update:go] else = ~p~n", [Else]),
         Else
     after
         rexi_monitor:stop(RexiMon)
     end.
 
 handle_message({rexi_DOWN, _, {_,NodeRef},_}, _Worker, Acc0) ->
+    couch_log:error("~nDEBUG [fabric_doc_update:handle_message] rexi_DOWN, node ref = ~p, worker = ~p, acc = ~p~n", [NodeRef, _Worker, Acc0]),
     {_, LenDocs, W, GroupedDocs, DocReplyDict} = Acc0,
     NewGrpDocs = [X || {#shard{node=N}, _} = X <- GroupedDocs, N =/= NodeRef],
     skip_message({length(NewGrpDocs), LenDocs, W, NewGrpDocs, DocReplyDict});
 
 handle_message({rexi_EXIT, _}, Worker, Acc0) ->
+    couch_log:error("~nDEBUG [fabric_doc_update:handle_message] rexi_EXIT, worker = ~p, acc = ~p~n", [Worker, Acc0]),
     {WC,LenDocs,W,GrpDocs,DocReplyDict} = Acc0,
     NewGrpDocs = lists:keydelete(Worker,1,GrpDocs),
     skip_message({WC-1,LenDocs,W,NewGrpDocs,DocReplyDict});
 handle_message(internal_server_error, Worker, Acc0) ->
+    couch_log:error("~nDEBUG [fabric_doc_update:handle_message] internal_server_error, worker = ~p, acc = ~p~n", [Worker, Acc0]),
     % happens when we fail to load validation functions in an RPC worker
     {WC,LenDocs,W,GrpDocs,DocReplyDict} = Acc0,
     NewGrpDocs = lists:keydelete(Worker,1,GrpDocs),
     skip_message({WC-1,LenDocs,W,NewGrpDocs,DocReplyDict});
 handle_message(attachment_chunk_received, _Worker, Acc0) ->
+    couch_log:error("~nDEBUG [fabric_doc_update:handle_message] attachment_chunk_received, worker = ~p, acc = ~p~n", [_Worker, Acc0]),
     {ok, Acc0};
 handle_message({ok, Replies}, Worker, Acc0) ->
+    couch_log:error("~nDEBUG [fabric_doc_update:handle_message] ok, replies = ~p, worker = ~p, acc = ~p~n", [Replies, Worker, Acc0]),
     {WaitingCount, DocCount, W, GroupedDocs, DocReplyDict0} = Acc0,
     {value, {_, Docs}, NewGrpDocs} = lists:keytake(Worker, 1, GroupedDocs),
     DocReplyDict = append_update_replies(Docs, Replies, DocReplyDict0),
+    couch_log:error("~nDEBUG [fabric_doc_update:handle_message] ok -> waiting = ~p, size = ~p~n", [WaitingCount, dict:size(DocReplyDict)]),
     case {WaitingCount, dict:size(DocReplyDict)} of
     {1, _} ->
         % last message has arrived, we need to conclude things
@@ -91,14 +101,18 @@ handle_message({ok, Replies}, Worker, Acc0) ->
         {ok, {WaitingCount - 1, DocCount, W, NewGrpDocs, DocReplyDict}}
     end;
 handle_message({missing_stub, Stub}, _, _) ->
+    couch_log:error("~nDEBUG [fabric_doc_update:handle_message] missing_stub = ~p~n", [Stub]),
     throw({missing_stub, Stub});
 handle_message({not_found, no_db_file} = X, Worker, Acc0) ->
+    couch_log:error("~nDEBUG [fabric_doc_update:handle_message] not_found, worker = ~p, acc = ~p~n", [Worker, Acc0]),
     {_, _, _, GroupedDocs, _} = Acc0,
     Docs = couch_util:get_value(Worker, GroupedDocs),
     handle_message({ok, [X || _D <- Docs]}, Worker, Acc0);
 handle_message({bad_request, Msg}, _, _) ->
+    couch_log:error("~nDEBUG [fabric_doc_update:handle_message] bad_request = ~p~n", [Msg]),
     throw({bad_request, Msg});
 handle_message({request_entity_too_large, Entity}, _, _) ->
+    couch_log:error("~nDEBUG [fabric_doc_update:handle_message] request_entity_too_large = ~p~n", [Entity]),
     throw({request_entity_too_large, Entity}).
 
 before_doc_update(DbName, Docs, Opts) ->
@@ -226,6 +240,7 @@ validate_atomic_update(_DbName, AllDocs, true) ->
 
 setup_all() ->
     meck:new([couch_log, couch_stats]),
+    meck:expect(couch_log, error, fun(_,_) -> ok end),
     meck:expect(couch_log, warning, fun(_,_) -> ok end),
     meck:expect(couch_stats, increment_counter, fun(_) -> ok end).
 

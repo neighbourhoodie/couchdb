@@ -36,6 +36,7 @@ decode_multipart_stream(ContentType, DataFun, Ref) ->
             fun(Next) -> mp_parse_doc(Next, []) end),
         unlink(Parent)
         end),
+    couch_log:error("~nDEBUG [couch_httpd_multipart:decode_multipart_stream] self = ~p, parser = ~p~n", [self(), Parser]),
     Parser ! {get_doc_bytes, Ref, self()},
     receive
     {started_open_doc_revs, NewRef} ->

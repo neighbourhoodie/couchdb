@@ -1184,6 +1184,7 @@ doc_tag(#doc{meta=Meta}) ->
     end.
 
 update_docs(Db, Docs0, Options, replicated_changes) ->
+    couch_log:error("~nDEBUG [couch_db:update_docs] replicated_changes~n", []),
     Docs = tag_docs(Docs0),
 
     PrepValidateFun = fun(Db0, DocBuckets0, ExistingDocInfos) ->
@@ -1194,6 +1195,8 @@ update_docs(Db, Docs0, Options, replicated_changes) ->
     {ok, DocBuckets, NonRepDocs, DocErrors}
         = before_docs_update(Db, Docs, PrepValidateFun, replicated_changes),
 
+    couch_log:error("~nDEBUG [couch_db:update_docs] replicated_changes, buckets = ~p, errors = ~p~n", [DocBuckets, DocErrors]),
+
     DocBuckets2 = [[doc_flush_atts(Db, check_dup_atts(Doc))
             || Doc <- Bucket] || Bucket <- DocBuckets],
     {ok, _} = write_and_commit(Db, DocBuckets2,
@@ -1201,6 +1204,7 @@ update_docs(Db, Docs0, Options, replicated_changes) ->
     {ok, DocErrors};
 
 update_docs(Db, Docs0, Options, interactive_edit) ->
+    couch_log:error("~nDEBUG [couch_db:update_docs] interactive_edit~n", []),
     Docs = tag_docs(Docs0),
 
     AllOrNothing = lists:member(all_or_nothing, Options),

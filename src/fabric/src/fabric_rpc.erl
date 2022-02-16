@@ -276,6 +276,7 @@ update_docs(DbName, Docs0, Options) ->
             end,
             {Docs0, X}
     end,
+    couch_log:error("~nDEBUG [fabric_rpc:update_docs] type = ~p~n", [Type]),
     Docs2 = make_att_readers(Docs1),
     with_db(DbName, Options, {couch_db, update_docs, [Docs2, Options, Type]}).
 
@@ -573,6 +574,7 @@ make_att_readers([#doc{atts=Atts0} = Doc | Rest]) ->
     [Doc#doc{atts = Atts} | make_att_readers(Rest)].
 
 make_att_reader({follows, Parser, Ref}) ->
+    couch_log:error("~nDEBUG [fabric_rpc:make_att_reader] {follows, ~p, ~p}~n", [Parser, Ref]),
     fun() ->
         ParserRef = case get(mp_parser_ref) of
             undefined ->
@@ -582,16 +584,20 @@ make_att_reader({follows, Parser, Ref}) ->
             Else ->
                 Else
         end,
+        couch_log:error("~nDEBUG [fabric_rpc:make_att_reader fun] ~p ! {get_byets, ~p, ~p}~n", [Parser, Ref, self()]),
         Parser ! {get_bytes, Ref, self()},
         receive
             {bytes, Ref, Bytes} ->
+                couch_log:error("~nDEBUG [fabric_rpc:make_att_reader fun] bytes, ~p~n", [Ref]),
                 rexi:reply(attachment_chunk_received),
                 Bytes;
             {'DOWN', ParserRef, _, _, Reason} ->
+                couch_log:error("~nDEBUG [fabric_rpc:make_att_reader fun] DOWN, ~p~n", [Reason]),
                 throw({mp_parser_died, Reason})
         end
     end;
 make_att_reader({fabric_attachment_receiver, Middleman, Length}) ->
+    couch_log:error("~nDEBUG [fabric_rpc:make_att_reader] {fabric_attachment_receiver, ~p, ~p}~n", [Middleman, Length]),
     fabric_doc_atts:receiver_callback(Middleman, Length);
 make_att_reader(Else) ->
     Else.

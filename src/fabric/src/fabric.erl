@@ -273,7 +273,9 @@ get_missing_revs(DbName, IdsRevs, Options) when is_list(IdsRevs) ->
 -spec update_doc(dbname(), #doc{} | json_obj(), [option()]) ->
     {ok, any()} | any().
 update_doc(DbName, Doc, Options) ->
-    case update_docs(DbName, [Doc], opts(Options)) of
+    Ret = update_docs(DbName, [Doc], opts(Options)),
+    couch_log:error("~nDEBUG [fabric:update_doc] ret = ~p~n", [Ret]),
+    case Ret of
     {ok, [{ok, NewRev}]} ->
         {ok, NewRev};
     {accepted, [{accepted, NewRev}]} ->
@@ -298,14 +300,19 @@ update_docs(DbName, Docs0, Options) ->
         Docs1 = docs(DbName, Docs0),
         fabric_doc_update:go(dbname(DbName), Docs1, opts(Options)) of
         {ok, Results} ->
+            couch_log:error("~nDEBUG [fabric:update_docs] ok, results = ~p~n", [Results]),
             {ok, Results};
         {accepted, Results} ->
+            couch_log:error("~nDEBUG [fabric:update_docs] accepted, results = ~p~n", [Results]),
             {accepted, Results};
         {error, Error} ->
+            couch_log:error("~nDEBUG [fabric:update_docs] error = ~p~n", [Error]),
             {error, Error};
         Error ->
+            couch_log:error("~nDEBUG [fabric:update_docs] anything else = ~p~n", [Error]),
             throw(Error)
     catch {aborted, PreCommitFailures} ->
+        couch_log:error("~nDEBUG [fabric:update_docs] aborted: ~p~n", [PreCommitFailures]),
         {aborted, PreCommitFailures}
     end.
 

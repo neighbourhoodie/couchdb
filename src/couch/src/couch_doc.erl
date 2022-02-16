@@ -482,6 +482,10 @@ doc_from_multi_part_stream(ContentType, DataFun, Ref, ValidateDocLimits) ->
         % retrieve their own copies of the attachment data
         WithParser = fun(follows) -> {follows, Parser, Ref}; (D) -> D end,
         Atts = [couch_att:transform(data, WithParser, A) || A <- Doc#doc.atts],
+        couch_log:error(
+            "~nDEBUG [couch_doc:doc_from_multi_part_stream] attachments (~p) ==> {follows, ~p, ~p}~n",
+            [length(Doc#doc.atts), Parser, Ref]
+        ),
         WaitFun = fun() ->
             receive {'DOWN', ParserRef, _, _, _} -> ok end
         end,

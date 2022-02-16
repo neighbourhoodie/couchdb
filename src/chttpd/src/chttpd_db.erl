@@ -1331,8 +1331,10 @@ send_updated_doc(#httpd{user_ctx=Ctx} = Req, Db, DocId, #doc{deleted=Deleted}=Do
         _ ->
             [UpdateType, {user_ctx,Ctx}, {w,W}]
         end,
+    couch_log:error("~nDEBUG [chttpd_db:send_updated_doc] w = ~p, options = ~p~n", [W, Options]),
     {Status, {etag, Etag}, Body} = update_doc(Db, DocId,
         #doc{deleted=Deleted}=Doc, Options),
+    couch_log:error("~nDEBUG [chttpd_db:send_updated_doc] status = ~p, etag = ~p~n", [Status, Etag]),
     HttpCode = http_code_from_status(Status),
     ResponseHeaders = [{"ETag", Etag} | Headers],
     send_json(Req, HttpCode, ResponseHeaders, Body).
@@ -1348,7 +1350,7 @@ http_code_from_status(Status) ->
     end.
 
 update_doc(Db, DocId, #doc{deleted=Deleted, body=DocBody}=Doc, Options) ->
-    {_, Ref} = spawn_monitor(fun() ->
+    {Pid, Ref} = spawn_monitor(fun() ->
         try fabric:update_doc(Db, Doc, Options) of
             Resp ->
                 exit({exit_ok, Resp})
@@ -1361,14 +1363,19 @@ update_doc(Db, DocId, #doc{deleted=Deleted, body=DocBody}=Doc, Options) ->
                 exit({exit_exit, Reason})
         end
     end),
+    couch_log:error("~nDEBUG [chttpd_db:update_doc] spawned pid = ~p, ref = ~p~n", [Pid, Ref]),
     Result = receive
         {'DOWN', Ref, _, _, {exit_ok, Ret}} ->
+            couch_log:error("~nDEBUG [chttpd_db:update_doc] DOWN (ok) ret = ~p~n", [Ret]),
             Ret;
         {'DOWN', Ref, _, _, {exit_throw, Reason}} ->
+            couch_log:error("~nDEBUG [chttpd_db:update_doc] DOWN (throw) reason = ~p~n", [Reason]),
             throw(Reason);
         {'DOWN', Ref, _, _, {exit_error, Reason}} ->
+            couch_log:error("~nDEBUG [chttpd_db:update_doc] DOWN (error) reason = ~p~n", [Reason]),
             erlang:error(Reason);
         {'DOWN', Ref, _, _, {exit_exit, Reason}} ->
+            couch_log:error("~nDEBUG [chttpd_db:update_doc] DOWN (exit) reason = ~p~n", [Reason]),
             erlang:exit(Reason)
     end,
 
