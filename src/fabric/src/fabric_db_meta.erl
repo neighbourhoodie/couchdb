@@ -157,10 +157,14 @@ get_all_security(DbName, Options) ->
         finished=[],
         num_workers=length(Workers)
     },
-    try fabric_util:recv(Workers, #shard.ref, Handler, Acc) of
+    couch_log:error("~nDEBUG [fabric_db_meta:get_all_security] workers = ~p, acc = ~p~n", [Workers, Acc]),
+    Result = fabric_util:recv(Workers, #shard.ref, Handler, Acc),
+    couch_log:error("~nDEBUG [fabric_db_meta:get_all_security] recv result = ~p~n", [Result]),
+    try Result of
     {ok, #acc{finished=SecObjs}} when length(SecObjs) > length(Workers) / 2 ->
         {ok, SecObjs};
     {ok, _} ->
+        couch_log:error("~nDEBUG [fabric_db_meta:get_all_security] no_majority~n", []),
         {error, no_majority};
     {timeout, #acc{workers=DefunctWorkers}} ->
         fabric_util:log_timeout(
@@ -175,24 +179,30 @@ get_all_security(DbName, Options) ->
     end.
 
 handle_get_message({rexi_DOWN, _, {_, Node}, _}, _, #acc{workers=Wrkrs}=Acc) ->
+    couch_log:error("~nDEBUG [fabric_db_meta:handle_get_message] rexi_DOWN :: node = ~p, acc = ~p~n", [Node, Acc]),
     RemWorkers = lists:filter(fun(S) -> S#shard.node =/= Node end, Wrkrs),
     maybe_finish_get(Acc#acc{workers=RemWorkers});
 handle_get_message({Props}=SecObj, W, Acc) when is_list(Props) ->
+    couch_log:error("~nDEBUG [fabric_db_meta:handle_get_message] secobj = ~p, w = ~p, acc = ~p~n", [SecObj, W, Acc]),
     NewAcc = Acc#acc{
         workers = (Acc#acc.workers -- [W]),
         finished = [{W, SecObj} | Acc#acc.finished]
     },
     maybe_finish_get(NewAcc);
 handle_get_message({rexi_EXIT, {maintenance_mode, _}}, W, Acc) ->
+    couch_log:error("~nDEBUG [fabric_db_meta:handle_get_message] rexi_EXIT :: w = ~p, acc = ~p~n", [W, Acc]),
     NewAcc = Acc#acc{workers = (Acc#acc.workers -- [W])},
     maybe_finish_get(NewAcc);
 handle_get_message(Error, W, Acc) ->
+    couch_log:error("~nDEBUG [fabric_db_meta:handle_get_message] error = ~p, w = ~p, acc = ~p~n", [Error, W, Acc]),
     Dst = {W#shard.node, W#shard.name},
     couch_log:error("Failed to get security object on ~p :: ~p", [Dst, Error]),
     NewAcc = Acc#acc{workers = (Acc#acc.workers -- [W])},
     maybe_finish_get(NewAcc).
 
 maybe_finish_get(#acc{workers=[]}=Acc) ->
+    couch_log:error("~nDEBUG [fabric_db_meta:maybe_finish_get] stop :: ~p~n", [Acc]),
     {stop, Acc};
 maybe_finish_get(Acc) ->
+    couch_log:error("~nDEBUG [fabric_db_meta:maybe_finish_get] ok :: ~p~n", [Acc]),
     {ok, Acc}.
