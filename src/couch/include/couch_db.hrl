@@ -183,7 +183,7 @@
 }).
 
 -record(btree, {
-    fds = [],
+    fd,
     root,
     extract_kv,
     assemble_kv,
