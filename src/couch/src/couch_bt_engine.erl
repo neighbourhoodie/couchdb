@@ -69,6 +69,8 @@
 
     open_write_stream/2,
     open_read_stream/2,
+    open_write_stream/3,
+    open_read_stream/3,
     is_active_stream/2,
 
     fold_docs/4,
@@ -601,8 +603,16 @@ commit_data(St) ->
 open_write_stream(#st{} = St, Options) ->
     couch_stream:open({couch_bt_engine_stream, {St#st.fd, []}}, Options).
 
+open_write_stream(#st{} = St, Generation, Options) ->
+    Fd = get_fd(St#st.fds, Generation),
+    couch_stream:open({couch_bt_engine_stream, {Fd, []}}, Options).
+
 open_read_stream(#st{} = St, StreamSt) ->
     {ok, {couch_bt_engine_stream, {St#st.fd, StreamSt}}}.
+
+open_read_stream(#st{} = St, Generation, StreamSt) ->
+    Fd = get_fd(St#st.fds, Generation),
+    {ok, {couch_bt_engine_stream, {Fd, StreamSt}}}.
 
 is_active_stream(#st{} = St, {couch_bt_engine_stream, {Fd, _}}) ->
     St#st.fd == Fd;

@@ -430,7 +430,7 @@ copy_docs(St, #st{} = NewSt, MixedInfos, Retry) ->
                         SizesAcc
                     ) ->
                         NewGeneration = increment_generation(OldGeneration),
-                        {Body, AttInfos} = copy_doc_attachments(St, Sp, NewSt),
+                        {Body, AttInfos} = copy_doc_attachments(St, Sp, NewSt, NewGeneration),
                         #size_info{external = OldExternalSize} = Leaf#leaf.sizes,
                         ExternalSize =
                             case OldExternalSize of
@@ -529,7 +529,7 @@ copy_docs(St, #st{} = NewSt, MixedInfos, Retry) ->
     update_compact_task(length(NewInfos)),
     NewSt#st{id_tree = IdEms, seq_tree = SeqTree}.
 
-copy_doc_attachments(#st{} = SrcSt, {_Gen, SrcSp}, DstSt) ->
+copy_doc_attachments(#st{} = SrcSt, {OldGeneration, SrcSp}, DstSt, NewGeneration) ->
     {ok, {BodyData, BinInfos0}} = couch_file:pread_term(SrcSt#st.fd, SrcSp),
     BinInfos =
         case BinInfos0 of
@@ -552,9 +552,9 @@ copy_doc_attachments(#st{} = SrcSt, {_Gen, SrcSp}, DstSt) ->
                 {ok, NewBinSp} = couch_stream:to_disk_term(NewStream),
                 couch_util:check_md5(ExpectedMd5, ActualMd5),
                 {Name, Type, NewBinSp, AttLen, AttLen, RevPos, ExpectedMd5, identity};
-            ({Name, Type, BinSp, AttLen, DiskLen, RevPos, ExpectedMd5, Enc1}) ->
+            ({Name, Type, BinSp, AttLen, DiskLen, RevPos, ExpectedMd5, Enc1, _OldGeneration}) ->
                 {ok, SrcStream} = couch_bt_engine:open_read_stream(SrcSt, BinSp),
-                {ok, DstStream} = couch_bt_engine:open_write_stream(DstSt, []),
+                {ok, DstStream} = couch_bt_engine:open_write_stream(DstSt, NewGeneration, []),
                 ok = couch_stream:copy(SrcStream, DstStream),
                 {NewStream, AttLen, _, ActualMd5, _IdentityMd5} =
                     couch_stream:close(DstStream),
@@ -571,7 +571,7 @@ copy_doc_attachments(#st{} = SrcSt, {_Gen, SrcSp}, DstSt) ->
                         _ ->
                             Enc1
                     end,
-                {Name, Type, NewBinSp, AttLen, DiskLen, RevPos, ExpectedMd5, Enc}
+                {Name, Type, NewBinSp, AttLen, DiskLen, RevPos, ExpectedMd5, Enc, NewGeneration}
         end,
         BinInfos
     ),
