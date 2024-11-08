@@ -35,6 +35,7 @@
     get_disk_version/1,
     get_doc_count/1,
     get_epochs/1,
+    get_fd/2,
     get_purge_seq/1,
     get_oldest_purge_seq/1,
     get_purge_infos_limit/1,
