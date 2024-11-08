@@ -1110,6 +1110,15 @@ rev_tree(DiskTree) ->
                     sizes = couch_db_updater:upgrade_sizes(Sizes),
                     atts = Atts
                 };
+            (_RevId, {Del, Ptr, Seq, Sizes, Atts, Gen}) ->
+                #leaf{
+                    deleted = ?i2b(Del),
+                    ptr = Ptr,
+                    seq = Seq,
+                    sizes = couch_db_updater:upgrade_sizes(Sizes),
+                    atts = Atts,
+                    generation = Gen
+                };
             (_RevId, ?REV_MISSING) ->
                 ?REV_MISSING
         end,
@@ -1127,9 +1136,10 @@ disk_tree(RevTree) ->
                     ptr = Ptr,
                     seq = Seq,
                     sizes = Sizes,
-                    atts = Atts
+                    atts = Atts,
+                    generation = Gen
                 } = Leaf,
-                {?b2i(Del), Ptr, Seq, split_sizes(Sizes), Atts}
+                {?b2i(Del), Ptr, Seq, split_sizes(Sizes), Atts, Gen}
         end,
         RevTree
     ).
