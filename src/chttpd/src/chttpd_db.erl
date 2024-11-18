@@ -292,14 +292,15 @@ maybe_flush_changes_feed(Acc0, Data, Len) ->
 
 handle_compact_req(#httpd{method = 'POST'} = Req, Db) ->
     chttpd:validate_ctype(Req, "application/json"),
+    Generation = list_to_integer(chttpd:qs_value(Req, "gen", "0")),
     case Req#httpd.path_parts of
         [_DbName, <<"_compact">>] ->
-            ok = fabric:compact(Db),
+            ok = fabric:compact({Db, Generation}),
             send_json(Req, 202, {[{ok, true}]});
         [DbName, <<"_compact">>, DesignName | _] ->
             case ddoc_cache:open(DbName, <<"_design/", DesignName/binary>>) of
                 {ok, _DDoc} ->
-                    ok = fabric:compact(Db, DesignName),
+                    ok = fabric:compact({Db, Generation}, DesignName),
                     send_json(Req, 202, {[{ok, true}]});
                 Error ->
                     throw(Error)

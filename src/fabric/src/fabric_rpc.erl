@@ -38,7 +38,7 @@
     get_partition_info/2
 ]).
 -export([get_all_security/2, open_shard/2]).
--export([compact/1, compact/2]).
+-export([compact/2, compact/3]).
 -export([get_purge_seq/2, get_purged_infos/1, purge_docs/3, set_purge_infos_limit/3]).
 
 -export([
@@ -334,10 +334,11 @@ open_shard(Name, Opts) ->
             couch_stats:increment_counter([fabric, open_shard, timeouts])
     end.
 
-compact(DbName) ->
-    with_db(DbName, [], {couch_db, start_compact, []}).
+compact(DbName, Generation) ->
+    with_db(DbName, [], {couch_db, start_compact, [Generation]}).
 
-compact(ShardName, DesignName) ->
+% TODO: generational indexes?
+compact(ShardName, Generation, DesignName) ->
     {ok, Pid} = couch_index_server:get_index(
         couch_mrview_index, ShardName, <<"_design/", DesignName/binary>>
     ),

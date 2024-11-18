@@ -80,7 +80,7 @@
     fold_purge_infos/5,
     count_changes_since/2,
 
-    start_compaction/4,
+    start_compaction/5,
     finish_compaction/4
 ]).
 
@@ -669,7 +669,9 @@ count_changes_since(St, SinceSeq) ->
     Changes.
 
 start_compaction(St, DbName, Options, Parent) ->
-    Args = [St, DbName, Options, Parent],
+    start_compaction(St, DbName, 0, Options, Parent).
+start_compaction(St, DbName, Generation, Options, Parent) ->
+    Args = [St, DbName, Generation, Options, Parent],
     Pid = spawn_link(couch_bt_engine_compactor, start, Args),
     {ok, St, Pid}.
 
@@ -1293,6 +1295,7 @@ finish_compaction_int(#st{} = OldSt, #st{} = NewSt1) ->
     couch_file:delete(RootDir, FilePath ++ ".compact.meta"),
 
     % maybe open new generation file
+    % TODO: only open the generation file that's one above the compacted generation
     OldFds = OldSt#st.fds,
     Fds = open_missing_generation_files(FilePath, OldFds),
 

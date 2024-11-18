@@ -632,6 +632,7 @@
 -callback start_compaction(
     DbHandle :: db_handle(),
     DbName :: binary(),
+    Generation :: non_neg_integer(),
     Options :: db_open_options(),
     Parent :: pid()
 ) ->
@@ -716,7 +717,7 @@
     fold_purge_infos/5,
     count_changes_since/2,
 
-    start_compaction/1,
+    start_compaction/2,
     finish_compaction/2,
     trigger_on_compact/1
 ]).
@@ -961,14 +962,14 @@ count_changes_since(#db{} = Db, StartSeq) ->
     #db{engine = {Engine, EngineState}} = Db,
     Engine:count_changes_since(EngineState, StartSeq).
 
-start_compaction(#db{} = Db) ->
+start_compaction(#db{} = Db, Generation) ->
     #db{
         engine = {Engine, EngineState},
         name = DbName,
         options = Options
     } = Db,
     {ok, NewEngineState, Pid} = Engine:start_compaction(
-        EngineState, DbName, Options, self()
+        EngineState, DbName, Generation, Options, self()
     ),
     {ok, Db#db{
         engine = {Engine, NewEngineState},

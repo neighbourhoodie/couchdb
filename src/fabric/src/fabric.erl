@@ -237,16 +237,16 @@ get_all_security(DbName) ->
 get_all_security(DbName, Options) ->
     fabric_db_meta:get_all_security(dbname(DbName), opts(Options)).
 
-compact(DbName) ->
+compact({DbName, Generation}) ->
     [
-        rexi:cast(Node, {fabric_rpc, compact, [Name]})
+        rexi:cast(Node, {fabric_rpc, compact, [Name, Generation]})
      || #shard{node = Node, name = Name} <- mem3:shards(dbname(DbName))
     ],
     ok.
 
-compact(DbName, DesignName) ->
+compact({DbName, Generation}, DesignName) ->
     [
-        rexi:cast(Node, {fabric_rpc, compact, [Name, DesignName]})
+        rexi:cast(Node, {fabric_rpc, compact, [Name, Generation, DesignName]})
      || #shard{node = Node, name = Name} <- mem3:shards(dbname(DbName))
     ],
     ok.

@@ -198,12 +198,13 @@ handle_changes_req1(Req, Db, ChangesArgs, ChangesFun) ->
     end.
 
 handle_compact_req(#httpd{method = 'POST'} = Req, Db) ->
+    Generation = list_to_integer(couch_httpd:qs_value(Req, "gen", "0")),
     case Req#httpd.path_parts of
         [_DbName, <<"_compact">>] ->
             ok = couch_db:check_is_admin(Db),
             couch_httpd:validate_ctype(Req, "application/json"),
             _ = couch_httpd:body(Req),
-            {ok, _} = couch_db:start_compact(Db),
+            {ok, _} = couch_db:start_compact(Db, Generation),
             send_json(Req, 202, {[{ok, true}]});
         [_DbName, <<"_compact">>, DesignName | _] ->
             DesignId = <<"_design/", DesignName/binary>>,
