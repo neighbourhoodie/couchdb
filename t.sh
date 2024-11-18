@@ -11,8 +11,9 @@ show-files () {
 }
 
 do-compact () {
-  $CURL -X POST -Hcontent-type:application/json $COUCH/asd/_compact
-  sleep 5
+  local gen="$1"
+  $CURL -X POST -Hcontent-type:application/json "$COUCH/asd/_compact?gen=$gen"
+  sleep 3
 }
 
 $CURL $COUCH/asd -X DELETE
@@ -24,20 +25,14 @@ $CURL $COUCH/asd/bar/zomg -X PUT -d '\0xbarf00d' -Hcontent-type:binary/octet-str
 
 show-files
 
-echo $'\n----[ first compaction ]----'
+for n in {1..5} ; do
+  echo $'\n' "----[ compaction round: $n ]----"
 
-do-compact
-show-files
+  let gen=n-1
+  do-compact "$gen"
+  show-files
 
-$CURL $COUCH/asd/foo | jq
-$CURL $COUCH/asd/bar | jq
-$CURL -i $COUCH/asd/bar/zomg
-
-echo $'\n----[ second compaction ]----'
-
-do-compact
-show-files
-
-$CURL $COUCH/asd/foo | jq
-$CURL $COUCH/asd/bar | jq
-$CURL -i $COUCH/asd/bar/zomg
+  $CURL $COUCH/asd/foo | jq
+  $CURL $COUCH/asd/bar | jq
+  $CURL -i $COUCH/asd/bar/zomg
+done

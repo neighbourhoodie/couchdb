@@ -13,7 +13,7 @@
 -module(couch_bt_engine_compactor).
 
 -export([
-    start/4,
+    start/5,
     max_generation/0
 ]).
 
@@ -22,6 +22,7 @@
 
 -record(comp_st, {
     db_name,
+    src_generation,
     old_st,
     new_st,
     meta_fd,
@@ -50,14 +51,18 @@
 
 max_generation() -> ?MAX_GENERATION.
 
-start(#st{} = St, DbName, Options, Parent) ->
+start(#st{} = St, DbName, ?MAX_GENERATION, Options, Parent) ->
+    % TODO
+    ok;
+
+start(#st{} = St, DbName, SrcGeneration, Options, Parent) when SrcGeneration < ?MAX_GENERATION ->
     erlang:put(io_priority, {db_compact, DbName}),
     couch_log:debug("Compaction process spawned for db \"~s\"", [DbName]),
 
     couch_db_engine:trigger_on_compact(DbName),
 
     ?COMP_EVENT(init),
-    {ok, InitCompSt} = open_compaction_files(DbName, St, Options),
+    {ok, InitCompSt} = open_compaction_files(DbName, SrcGeneration, St, Options),
     ?COMP_EVENT(files_opened),
 
     Stages = [
@@ -90,7 +95,7 @@ start(#st{} = St, DbName, Options, Parent) ->
     Msg = {compact_done, couch_bt_engine, FinalNewSt#st.filepath},
     gen_server:cast(Parent, Msg).
 
-open_compaction_files(DbName, OldSt, Options) ->
+open_compaction_files(DbName, SrcGeneration, OldSt, Options) ->
     #st{
         filepath = DbFilePath,
         header = SrcHdr
@@ -112,6 +117,7 @@ open_compaction_files(DbName, OldSt, Options) ->
                 St1 = bind_emsort(St0, MetaFd, A#comp_header.meta_st),
                 #comp_st{
                     db_name = DbName,
+                    src_generation = SrcGeneration,
                     old_st = OldSt,
                     new_st = St1,
                     meta_fd = MetaFd,
@@ -129,6 +135,7 @@ open_compaction_files(DbName, OldSt, Options) ->
                 St1 = bind_emsort(St0, MetaFd, nil),
                 #comp_st{
                     db_name = DbName,
+                    src_generation = SrcGeneration,
                     old_st = OldSt,
                     new_st = St1,
                     meta_fd = MetaFd,
@@ -148,6 +155,7 @@ open_compaction_files(DbName, OldSt, Options) ->
                 St1 = bind_emsort(St0, MetaFd, nil),
                 #comp_st{
                     db_name = DbName,
+                    src_generation = SrcGeneration,
                     old_st = OldSt,
                     new_st = St1,
                     meta_fd = MetaFd,
@@ -296,6 +304,7 @@ copy_purge_infos(OldSt, NewSt0, Infos, MinPurgeSeq, Retry) ->
 copy_compact(#comp_st{} = CompSt) ->
     #comp_st{
         db_name = DbName,
+        src_generation = SrcGeneration,
         old_st = St,
         new_st = NewSt0,
         retry = Retry
@@ -332,7 +341,7 @@ copy_compact(#comp_st{} = CompSt) ->
             if
                 AccUncopiedSize2 >= BufferSize ->
                     NewSt2 = copy_docs(
-                        St, AccNewSt, lists:reverse([DocInfo | AccUncopied]), Retry
+                        St, SrcGeneration, AccNewSt, lists:reverse([DocInfo | AccUncopied]), Retry
                     ),
                     AccCopiedSize2 = AccCopiedSize + AccUncopiedSize2,
                     if
@@ -380,7 +389,7 @@ copy_compact(#comp_st{} = CompSt) ->
             [{start_key, NewUpdateSeq + 1}]
         ),
 
-    NewSt3 = copy_docs(St, NewSt2, lists:reverse(Uncopied), Retry),
+    NewSt3 = copy_docs(St, SrcGeneration, NewSt2, lists:reverse(Uncopied), Retry),
 
     ?COMP_EVENT(seq_done),
 
@@ -407,7 +416,7 @@ set_generation(#st{max_generation = MaxGeneration} = St, NewGeneration) when New
 set_generation(St, _) ->
     St.
 
-copy_docs(St, #st{} = NewSt, MixedInfos, Retry) ->
+copy_docs(St, SrcGeneration, #st{} = NewSt, MixedInfos, Retry) ->
     couch_log:error("~n~n copy_docs(St: ~p, NewSt: ~p~nn", [St, NewSt]),
     DocInfoIds = [Id || #doc_info{id = Id} <- MixedInfos],
     LookupResults = couch_btree:lookup(St#st.id_tree, DocInfoIds),
@@ -423,9 +432,7 @@ copy_docs(St, #st{} = NewSt, MixedInfos, Retry) ->
         fun(Info) ->
             {NewRevTree, FinalAcc} = couch_key_tree:mapfold(
                 fun
-                    (_, #leaf{generation = ?MAX_GENERATION} = Leaf, leaf, SizesAcc) ->
-                        {Leaf, couch_db_updater:add_sizes(leaf, Leaf, SizesAcc)};
-                    ({RevPos, RevId}, #leaf{ptr = Sp, generation = OldGeneration} = Leaf, leaf, SizesAcc) ->
+                    ({RevPos, RevId}, #leaf{ptr = Sp, generation = OldGeneration} = Leaf, leaf, SizesAcc) when OldGeneration =:= SrcGeneration ->
                         NewGeneration = increment_generation(OldGeneration),
                         {Body, AttInfos} = copy_doc_attachments(St, Sp, NewSt, NewGeneration),
                         #size_info{external = OldExternalSize} = Leaf#leaf.sizes,
@@ -459,6 +466,8 @@ copy_docs(St, #st{} = NewSt, MixedInfos, Retry) ->
                             generation = NewGeneration
                         },
                         {NewLeaf, couch_db_updater:add_sizes(leaf, NewLeaf, SizesAcc)};
+                    (_, #leaf{} = Leaf, leaf, SizesAcc) ->
+                        {Leaf, couch_db_updater:add_sizes(leaf, Leaf, SizesAcc)};
                     (_Rev, _Leaf, branch, SizesAcc) ->
                         {?REV_MISSING, SizesAcc}
                 end,
