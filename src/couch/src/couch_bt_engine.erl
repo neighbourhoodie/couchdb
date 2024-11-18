@@ -1242,7 +1242,7 @@ fold_docs_reduce_to_count(Reds) ->
     FinalRed = couch_btree:final_reduce(RedFun, Reds),
     element(1, FinalRed).
 
-open_missing_generation_files(FilePath, Fds) when length(Fds) =:= ?MAX_GENERATION ->
+open_missing_generation_files(FilePath, Fds) when length(Fds) =:= 1 + ?MAX_GENERATION ->
     Fds;
 open_missing_generation_files(FilePath, Fds) ->
     NextGeneration = length(Fds),
