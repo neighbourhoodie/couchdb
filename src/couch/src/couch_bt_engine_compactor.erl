@@ -423,6 +423,8 @@ copy_docs(St, #st{} = NewSt, MixedInfos, Retry) ->
         fun(Info) ->
             {NewRevTree, FinalAcc} = couch_key_tree:mapfold(
                 fun
+                    (_, #leaf{generation = ?MAX_GENERATION} = Leaf, leaf, SizesAcc) ->
+                        {Leaf, couch_db_updater:add_sizes(leaf, Leaf, SizesAcc)};
                     (
                         {RevPos, RevId},
                         #leaf{ptr = Sp, generation = OldGeneration} = Leaf,
