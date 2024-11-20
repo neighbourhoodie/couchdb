@@ -1259,7 +1259,7 @@ open_missing_generation_files(FilePath, Fds) when length(Fds) =:= 1 + ?MAX_GENER
 open_missing_generation_files(FilePath, Fds) ->
     NextGeneration = length(Fds),
     Fd = open_generation_file(FilePath, NextGeneration, []),
-    Fds ++ [Fd].
+    open_missing_generation_files(FilePath, Fds ++ [Fd]).
 
 finish_compaction_int(#st{} = OldSt, #st{} = NewSt1, Generation) ->
     #st{
@@ -1314,7 +1314,7 @@ finish_compaction_int(#st{} = OldSt, #st{} = NewSt1, Generation) ->
 
     % maybe open new generation file
     % TODO: only open the generation file that's one above the compacted generation
-    OldFds = OldSt#st.fds,
+    OldFds = NewSt2#st.fds,
     Fds = open_missing_generation_files(FilePath, OldFds),
 
     % We're finished with our old state
