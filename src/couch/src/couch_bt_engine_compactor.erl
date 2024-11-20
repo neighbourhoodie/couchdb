@@ -91,7 +91,7 @@ start(#st{} = St, DbName, SrcGeneration, Options, Parent) when SrcGeneration < ?
     ok = couch_file:close(MetaFd),
 
     ?COMP_EVENT(before_notify),
-    Msg = {compact_done, couch_bt_engine, FinalNewSt#st.filepath},
+    Msg = {compact_done, couch_bt_engine, {FinalNewSt#st.filepath, SrcGeneration}},
     gen_server:cast(Parent, Msg).
 
 open_compaction_files(DbName, SrcGeneration, OldSt, Options) ->

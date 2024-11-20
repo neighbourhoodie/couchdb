@@ -675,7 +675,7 @@ start_compaction(St, DbName, Generation, Options, Parent) ->
     Pid = spawn_link(couch_bt_engine_compactor, start, Args),
     {ok, St, Pid}.
 
-finish_compaction(OldState, DbName, Options, CompactFilePath) ->
+finish_compaction(OldState, DbName, Options, {CompactFilePath, Generation}) ->
     {ok, NewState1} = ?MODULE:init(CompactFilePath, [compacting | Options]),
     OldSeq = get_update_seq(OldState),
     NewSeq = get_update_seq(NewState1),
@@ -694,7 +694,16 @@ finish_compaction(OldState, DbName, Options, CompactFilePath) ->
                 [OldSeq, NewSeq]
             ),
             ok = decref(NewState1),
-            start_compaction(OldState, DbName, Options, self())
+
+            % TODO: What should we do here when generation > 0? The gen-0 file
+            % has gained new doc data, which the .compact file does not have,
+            % so we cannot swap over to the compacted file without data loss.
+            % However, if gen > 0, then further compaction will not move the
+            % new bodies out of the gen-0 file. Does this command "resume" to
+            % just cover the most recent writes, or does it re-scan the whole
+            % file?
+
+            start_compaction(OldState, DbName, Generation, Options, self())
     end.
 
 id_tree_split(#full_doc_info{} = Info) ->
