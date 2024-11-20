@@ -681,7 +681,7 @@ finish_compaction(OldState, DbName, Options, {CompactFilePath, Generation}) ->
     NewSeq = get_update_seq(NewState1),
     case OldSeq == NewSeq of
         true ->
-            finish_compaction_int(OldState, NewState1);
+            finish_compaction_int(OldState, NewState1, Generation);
         false ->
             Level = list_to_existing_atom(
                 config:get(
@@ -896,13 +896,14 @@ open_db_file(FilePath, Options) ->
             throw(Error)
     end.
 
+generation_file_path(FilePath, 0) ->
+    FilePath;
+generation_file_path(FilePath, Generation) ->
+    Gen = integer_to_list(Generation),
+    string:replace(FilePath, ".couch", "." ++ Gen ++ ".couch", trailing).
+
 open_generation_file(FilePath, Generation, Options) ->
-    GenFilePath = string:replace(
-        FilePath,
-        ".couch",
-        "." ++ integer_to_list(Generation) ++ ".couch",
-        trailing
-    ),
+    GenFilePath = generation_file_path(FilePath, Generation),
     case catch open_db_file(GenFilePath, [nologifmissing | Options]) of
         {ok, Db} ->
             Db;
@@ -1260,7 +1261,7 @@ open_missing_generation_files(FilePath, Fds) ->
     Fd = open_generation_file(FilePath, NextGeneration, []),
     Fds ++ [Fd].
 
-finish_compaction_int(#st{} = OldSt, #st{} = NewSt1) ->
+finish_compaction_int(#st{} = OldSt, #st{} = NewSt1, Generation) ->
     #st{
         filepath = FilePath,
         local_tree = OldLocal
@@ -1302,6 +1303,14 @@ finish_compaction_int(#st{} = OldSt, #st{} = NewSt1) ->
     % Delete the old meta compaction file after promoting
     % the compaction file.
     couch_file:delete(RootDir, FilePath ++ ".compact.meta"),
+
+    % Delete the old generation file; at this point all its live data should
+    % have been promoted to the next generation, and the active .couch file is
+    % no longer pointing to anything in the old file
+    case generation_file_path(FilePath, Generation) of
+        FilePath -> noop;
+        GenFilePath -> couch_file:delete(RootDir, GenFilePath)
+    end,
 
     % maybe open new generation file
     % TODO: only open the generation file that's one above the compacted generation
