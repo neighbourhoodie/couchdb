@@ -378,15 +378,23 @@ flush_trees(
         {0, 0, []},
         Unflushed
     ),
-    % TODO: handle non-0 generations
-    [{FinalAS, FinalES, FinalAtts} | _] = FinalAcc,
-    TotalAttSize = lists:foldl(fun({_, S}, A) -> S + A end, 0, FinalAtts),
+
+    GenSizes = lists:map(
+        fun({FinalAS, FinalES, FinalAtts}) ->
+            TotalAttSize = lists:foldl(fun({_, S}, A) -> S + A end, 0, FinalAtts),
+            #size_info{
+                active = FinalAS + TotalAttSize,
+                external = FinalES + TotalAttSize
+            }
+        end,
+        FinalAcc
+    ),
+    [Gen0SizeInfo | _] = GenSizes,
+
     NewInfo = InfoUnflushed#full_doc_info{
         rev_tree = Flushed,
-        sizes = #size_info{
-            active = FinalAS + TotalAttSize,
-            external = FinalES + TotalAttSize
-        }
+        sizes = Gen0SizeInfo,
+        gen_sizes = GenSizes
     },
     flush_trees(Db, RestUnflushed, [NewInfo | AccFlushed]).
 

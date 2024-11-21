@@ -478,18 +478,25 @@ copy_docs(St, SrcGeneration, #st{} = NewSt, MixedInfos, Retry) ->
                 {0, 0, []},
                 Info#full_doc_info.rev_tree
             ),
-            % TODO handle later generations
-            [{FinalAS, FinalES, FinalAtts} | _] = FinalAcc,
-            TotalAttSize = lists:foldl(fun({_, S}, A) -> S + A end, 0, FinalAtts),
-            NewActiveSize = FinalAS + TotalAttSize,
-            NewExternalSize = FinalES + TotalAttSize,
+
+            GenSizes = lists:map(
+                fun({FinalAS, FinalES, FinalAtts}) ->
+                    TotalAttSize = lists:foldl(fun({_, S}, A) -> S + A end, 0, FinalAtts),
+                    #size_info{
+                        active = FinalAS + TotalAttSize,
+                        external = FinalES + TotalAttSize
+                    }
+                end,
+                FinalAcc
+            ),
+            [Gen0SizeInfo | _] = GenSizes,
+
             ?COMP_EVENT(seq_copy),
+
             Info#full_doc_info{
                 rev_tree = NewRevTree,
-                sizes = #size_info{
-                    active = NewActiveSize,
-                    external = NewExternalSize
-                }
+                sizes = Gen0SizeInfo,
+                gen_sizes = GenSizes
             }
         end,
         NewInfos0

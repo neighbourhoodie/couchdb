@@ -80,7 +80,8 @@
     update_seq = 0,
     deleted = false,
     rev_tree = [],
-    sizes = #size_info{}
+    sizes = #size_info{},
+    gen_sizes = []
 }).
 
 -record(httpd, {
