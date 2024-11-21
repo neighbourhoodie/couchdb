@@ -478,7 +478,8 @@ copy_docs(St, SrcGeneration, #st{} = NewSt, MixedInfos, Retry) ->
                 {0, 0, []},
                 Info#full_doc_info.rev_tree
             ),
-            {FinalAS, FinalES, FinalAtts} = FinalAcc,
+            % TODO handle later generations
+            [{FinalAS, FinalES, FinalAtts} | _] = FinalAcc,
             TotalAttSize = lists:foldl(fun({_, S}, A) -> S + A end, 0, FinalAtts),
             NewActiveSize = FinalAS + TotalAttSize,
             NewExternalSize = FinalES + TotalAttSize,

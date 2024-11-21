@@ -378,7 +378,8 @@ flush_trees(
         {0, 0, []},
         Unflushed
     ),
-    {FinalAS, FinalES, FinalAtts} = FinalAcc,
+    % TODO: handle non-0 generations
+    [{FinalAS, FinalES, FinalAtts} | _] = FinalAcc,
     TotalAttSize = lists:foldl(fun({_, S}, A) -> S + A end, 0, FinalAtts),
     NewInfo = InfoUnflushed#full_doc_info{
         rev_tree = Flushed,
@@ -416,7 +417,19 @@ check_doc_atts(Db, Doc) ->
             end
     end.
 
-add_sizes(leaf, #leaf{sizes = Sizes, atts = AttSizes}, Acc) ->
+add_sizes(Type, Leaf, Acc) ->
+    add_sizes_int(Type, Leaf, Acc).
+
+add_sizes_int(Type, Leaf, []) ->
+    add_sizes_int(Type, Leaf, [{0, 0, []}]);
+add_sizes_int(Type, #leaf{generation = 0} = Leaf, [Acc | Rest]) ->
+    [add_sizes_single(Type, Leaf, Acc) | Rest];
+add_sizes_int(Type, #leaf{generation = G} = Leaf, [Acc | Rest]) ->
+    [Acc | add_sizes_int(Type, Leaf#leaf{generation = G - 1}, Rest)];
+add_sizes_int(Type, Leaf, Acc) ->
+    add_sizes_int(Type, Leaf, [Acc]).
+
+add_sizes_single(leaf, #leaf{sizes = Sizes, atts = AttSizes}, Acc) ->
     % Maybe upgrade from disk_size only
     #size_info{
         active = ActiveSize,
@@ -427,7 +440,7 @@ add_sizes(leaf, #leaf{sizes = Sizes, atts = AttSizes}, Acc) ->
     NewESAcc = ExternalSize + ESAcc,
     NewAttsAcc = lists:umerge(AttSizes, AttsAcc),
     {NewASAcc, NewESAcc, NewAttsAcc};
-add_sizes(_, #leaf{}, Acc) ->
+add_sizes_single(_, #leaf{}, Acc) ->
     % For intermediate nodes external and active contribution is 0
     Acc.
 
@@ -784,6 +797,7 @@ estimate_size(#full_doc_info{} = FDI) ->
         (_Rev, _Value, branch, SizesAcc) ->
             SizesAcc
     end,
+    % TODO: this does not correctly handle multi-generation SizesAcc
     {_, FinalES, FinalAtts} = couch_key_tree:fold(Fun, {0, 0, []}, RevTree),
     TotalAttSize = lists:foldl(fun({_, S}, A) -> S + A end, 0, FinalAtts),
     FinalES + TotalAttSize.
