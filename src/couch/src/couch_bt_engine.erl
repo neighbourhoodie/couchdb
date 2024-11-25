@@ -264,39 +264,23 @@ get_revs_limit(#st{header = Header}) ->
     couch_bt_engine_header:get(Header, revs_limit).
 
 get_size_info(#st{} = St) ->
-    {ok, FileSize} = couch_file:bytes(St#st.fd),
     {ok, DbReduction} = couch_btree:full_reduce(St#st.id_tree),
-    SizeInfo0 = element(3, DbReduction),
-    % TODO: return generational representation
-    SizeInfo = collapse_size_info(SizeInfo0),
-    ActiveSize = active_size(St, SizeInfo),
-    ExternalSize = SizeInfo#size_info.external,
-    [
-        {active, ActiveSize},
-        {external, ExternalSize},
-        {file, FileSize}
-    ].
-
-% TODO: this is sort of like upgrade_sizes except we merge a list into a single
-% record
-collapse_size_info(S) when is_list(S) ->
-    lists:foldl(
-        fun(SI, Acc) ->
-            #size_info{active = A, external = E} = collapse_size_info(SI),
-            #size_info{
-                active = Acc#size_info.active + A,
-                external = Acc#size_info.external + E
-            }
+    SizeInfo = upgrade_sizes(element(3, DbReduction)),
+    lists:zipwith(
+        fun(Gen, SI) ->
+            Fd = get_fd(St#st.fds, Gen - 1),
+            {ok, FileSize} = couch_file:bytes(Fd),
+            ActiveSize = active_size(St, SI),
+            ExternalSize = SI#size_info.external,
+            [
+                {active, ActiveSize},
+                {external, ExternalSize},
+                {file, FileSize}
+            ]
         end,
-        #size_info{active = 0, external = 0},
-        S
-    );
-collapse_size_info(#size_info{} = SI) ->
-    SI;
-collapse_size_info({AS, ES}) ->
-    #size_info{active = AS, external = ES};
-collapse_size_info(AS) ->
-    #size_info{active = AS}.
+        lists:seq(1, length(SizeInfo)),
+        upgrade_sizes(SizeInfo)
+    ).
 
 partition_size_cb(traverse, Key, {DC, DDC, Sizes}, {Partition, DCAcc, DDCAcc, SizesAcc}) ->
     case couch_partition:is_member(Key, Partition) of

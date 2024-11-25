@@ -108,7 +108,7 @@ merge_results(Info) ->
             (compact_running, X, Acc) ->
                 [{compact_running, lists:member(true, X)} | Acc];
             (sizes, X, Acc) ->
-                [{sizes, {merge_object(X)}} | Acc];
+                [{sizes, merge_object(X)} | Acc];
             (disk_format_version, X, Acc) ->
                 [{disk_format_version, lists:max(X)} | Acc];
             (cluster, [X], Acc) ->
