@@ -724,7 +724,7 @@ id_tree_join(Id, {HighSeq, Deleted, Sizes, DiskTree}) ->
         id = Id,
         update_seq = HighSeq,
         deleted = ?i2b(Deleted),
-        sizes = couch_db_updater:upgrade_sizes(Sizes),
+        sizes = upgrade_sizes(Sizes),
         rev_tree = rev_tree(DiskTree)
     }.
 
@@ -1158,10 +1158,14 @@ disk_tree(RevTree) ->
     ).
 
 split_sizes(#size_info{} = SI) ->
-    {SI#size_info.active, SI#size_info.external}.
+    {SI#size_info.active, SI#size_info.external};
+split_sizes(Sizes) when is_list(Sizes) ->
+    lists:map(fun split_sizes/1, Sizes).
 
 join_sizes({Active, External}) when is_integer(Active), is_integer(External) ->
-    #size_info{active = Active, external = External}.
+    #size_info{active = Active, external = External};
+join_sizes(Sizes) when is_list(Sizes) ->
+    lists:map(fun join_sizes/1, Sizes).
 
 reduce_sizes(nil, _) ->
     nil;
@@ -1172,10 +1176,21 @@ reduce_sizes(#size_info{} = S1, #size_info{} = S2) ->
         active = S1#size_info.active + S2#size_info.active,
         external = S1#size_info.external + S2#size_info.external
     };
+reduce_sizes([], S) ->
+    S;
+reduce_sizes(S, []) ->
+    S;
+reduce_sizes([S1 | R1], [S2 | R2]) ->
+    [reduce_sizes(S1, S2) | reduce_sizes(R1, R2)];
 reduce_sizes(S1, S2) ->
-    US1 = couch_db_updater:upgrade_sizes(S1),
-    US2 = couch_db_updater:upgrade_sizes(S2),
+    US1 = upgrade_sizes(S1),
+    US2 = upgrade_sizes(S2),
     reduce_sizes(US1, US2).
+
+upgrade_sizes(S) when is_list(S) ->
+    lists:map(fun couch_db_updater:upgrade_sizes/1, S);
+upgrade_sizes(S) ->
+    upgrade_sizes([S]).
 
 active_size(#st{} = St, #size_info{} = SI) ->
     Trees = [

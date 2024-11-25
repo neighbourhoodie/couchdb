@@ -489,14 +489,12 @@ copy_docs(St, SrcGeneration, #st{} = NewSt, MixedInfos, Retry) ->
                 end,
                 FinalAcc
             ),
-            [Gen0SizeInfo | _] = GenSizes,
 
             ?COMP_EVENT(seq_copy),
 
             Info#full_doc_info{
                 rev_tree = NewRevTree,
-                sizes = Gen0SizeInfo,
-                gen_sizes = GenSizes
+                sizes = GenSizes
             }
         end,
         NewInfos0
