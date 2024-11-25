@@ -413,12 +413,10 @@ flush_trees(
         end,
         FinalAcc
     ),
-    [Gen0SizeInfo|_] = GenSizes,
 
     NewInfo = InfoUnflushed#full_doc_info{
         rev_tree = Flushed,
-        sizes = Gen0SizeInfo,
-        gen_sizes = GenSizes
+        sizes = GenSizes
     },
     flush_trees(Db, RestUnflushed, [NewInfo | AccFlushed]).
 
@@ -479,6 +477,10 @@ add_sizes_single(_, #leaf{atts = AttSizes}, Acc) ->
     {ASAcc, ESAcc, AttsAcc} = Acc,
     {ASAcc, ESAcc, lists:umerge(AttSizes, AttsAcc)}.
 
+% TODO: this causes massive CPU load for some reason; only some uses of
+% upgrade_sizes are currently list-aware
+% upgrade_sizes(S) when is_list(S) ->
+%     lists:map(fun upgrade_sizes/1, S);
 upgrade_sizes(#size_info{} = SI) ->
     SI;
 upgrade_sizes({D, E}) ->
