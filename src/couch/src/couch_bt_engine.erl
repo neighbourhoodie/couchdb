@@ -267,15 +267,8 @@ get_size_info(#st{} = St) ->
     {ok, FileSize} = couch_file:bytes(St#st.fd),
     {ok, DbReduction} = couch_btree:full_reduce(St#st.id_tree),
     SizeInfo0 = element(3, DbReduction),
-    SizeInfo =
-        case SizeInfo0 of
-            SI when is_record(SI, size_info) ->
-                SI;
-            {AS, ES} ->
-                #size_info{active = AS, external = ES};
-            AS ->
-                #size_info{active = AS}
-        end,
+    % TODO: return generational representation
+    SizeInfo = collapse_size_info(SizeInfo0),
     ActiveSize = active_size(St, SizeInfo),
     ExternalSize = SizeInfo#size_info.external,
     [
@@ -283,6 +276,27 @@ get_size_info(#st{} = St) ->
         {external, ExternalSize},
         {file, FileSize}
     ].
+
+% TODO: this is sort of like upgrade_sizes except we merge a list into a single
+% record
+collapse_size_info(S) when is_list(S) ->
+    lists:foldl(
+        fun(SI, Acc) ->
+            #size_info{active = A, external = E} = collapse_size_info(SI),
+            #size_info{
+                active = Acc#size_info.active + A,
+                external = Acc#size_info.external + E
+            }
+        end,
+        #size_info{active = 0, external = 0},
+        S
+    );
+collapse_size_info(#size_info{} = SI) ->
+    SI;
+collapse_size_info({AS, ES}) ->
+    #size_info{active = AS, external = ES};
+collapse_size_info(AS) ->
+    #size_info{active = AS}.
 
 partition_size_cb(traverse, Key, {DC, DDC, Sizes}, {Partition, DCAcc, DDCAcc, SizesAcc}) ->
     case couch_partition:is_member(Key, Partition) of
