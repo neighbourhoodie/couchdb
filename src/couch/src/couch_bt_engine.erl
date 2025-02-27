@@ -1103,32 +1103,23 @@ rev_tree(DiskTree) ->
             (_RevId, {Del, Ptr, Seq}) ->
                 #leaf{
                     deleted = ?i2b(Del),
-                    ptr = Ptr,
+                    ptr = upgrade_pointer(Ptr),
                     seq = Seq
                 };
             (_RevId, {Del, Ptr, Seq, Size}) ->
                 #leaf{
                     deleted = ?i2b(Del),
-                    ptr = Ptr,
+                    ptr = upgrade_pointer(Ptr),
                     seq = Seq,
                     sizes = couch_db_updater:upgrade_sizes(Size)
                 };
             (_RevId, {Del, Ptr, Seq, Sizes, Atts}) ->
                 #leaf{
                     deleted = ?i2b(Del),
-                    ptr = Ptr,
+                    ptr = upgrade_pointer(Ptr),
                     seq = Seq,
                     sizes = couch_db_updater:upgrade_sizes(Sizes),
                     atts = Atts
-                };
-            (_RevId, {Del, Ptr, Seq, Sizes, Atts, Gen}) ->
-                #leaf{
-                    deleted = ?i2b(Del),
-                    ptr = Ptr,
-                    seq = Seq,
-                    sizes = couch_db_updater:upgrade_sizes(Sizes),
-                    atts = Atts,
-                    generation = Gen
                 };
             (_RevId, ?REV_MISSING) ->
                 ?REV_MISSING
@@ -1147,13 +1138,17 @@ disk_tree(RevTree) ->
                     ptr = Ptr,
                     seq = Seq,
                     sizes = Sizes,
-                    atts = Atts,
-                    generation = Gen
+                    atts = Atts
                 } = Leaf,
-                {?b2i(Del), Ptr, Seq, split_sizes(Sizes), Atts, Gen}
+                {?b2i(Del), upgrade_pointer(Ptr), Seq, split_sizes(Sizes), Atts}
         end,
         RevTree
     ).
+
+upgrade_pointer({Gen, Ptr}) ->
+    {Gen, Ptr};
+upgrade_pointer(Ptr) when is_integer(Ptr) ->
+    {0, Ptr}.
 
 split_sizes(#size_info{} = SI) ->
     {SI#size_info.active, SI#size_info.external};

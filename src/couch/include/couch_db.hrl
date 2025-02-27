@@ -210,8 +210,7 @@
     ptr,
     seq,
     sizes = #size_info{},
-    atts = [],
-    generation = 0
+    atts = []
 }).
 
 -record (fabric_changes_acc, {

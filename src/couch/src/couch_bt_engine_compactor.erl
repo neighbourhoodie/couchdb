@@ -431,14 +431,13 @@ copy_docs(St, SrcGeneration, #st{} = NewSt, MixedInfos, Retry) ->
         fun(Info) ->
             {NewRevTree, FinalAcc} = couch_key_tree:mapfold(
                 fun
-                    (
-                        {RevPos, RevId},
-                        #leaf{ptr = Sp, generation = OldGeneration} = Leaf,
-                        leaf,
-                        SizesAcc
-                    ) when OldGeneration =:= SrcGeneration ->
+                    ({RevPos, RevId}, #leaf{ptr = {OldGeneration, Sp}} = Leaf, leaf, SizesAcc) when
+                        OldGeneration =:= SrcGeneration
+                    ->
                         NewGeneration = increment_generation(OldGeneration),
-                        {Body, AttInfos} = copy_doc_attachments(St, Sp, NewSt, NewGeneration),
+                        {Body, AttInfos} = copy_doc_attachments(
+                            St, {OldGeneration, Sp}, NewSt, NewGeneration
+                        ),
                         #size_info{external = OldExternalSize} = Leaf#leaf.sizes,
                         ExternalSize =
                             case OldExternalSize of
@@ -466,8 +465,7 @@ copy_docs(St, SrcGeneration, #st{} = NewSt, MixedInfos, Retry) ->
                                 active = ActiveSize,
                                 external = ExternalSize
                             },
-                            atts = AttSizes,
-                            generation = NewGeneration
+                            atts = AttSizes
                         },
                         {NewLeaf, couch_db_updater:add_sizes(leaf, NewLeaf, SizesAcc)};
                     (_, #leaf{} = Leaf, leaf, SizesAcc) ->

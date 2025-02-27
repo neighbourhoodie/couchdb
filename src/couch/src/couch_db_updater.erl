@@ -428,10 +428,10 @@ add_sizes(Type, Leaf, Acc) ->
 
 add_sizes_int(Type, Leaf, []) ->
     add_sizes_int(Type, Leaf, [{0, 0, []}]);
-add_sizes_int(Type, #leaf{generation = 0} = Leaf, [Acc | Rest]) ->
+add_sizes_int(Type, #leaf{ptr = {0, _}} = Leaf, [Acc | Rest]) ->
     [add_sizes_single(Type, Leaf, Acc) | Rest];
-add_sizes_int(Type, #leaf{generation = G} = Leaf, [Acc | Rest]) ->
-    [Acc | add_sizes_int(Type, Leaf#leaf{generation = G - 1}, Rest)];
+add_sizes_int(Type, #leaf{ptr = {Gen, Ptr}} = Leaf, [Acc | Rest]) ->
+    [Acc | add_sizes_int(Type, Leaf#leaf{ptr = {Gen - 1, Ptr}}, Rest)];
 add_sizes_int(Type, Leaf, Acc) ->
     add_sizes_int(Type, Leaf, [Acc]).
 
