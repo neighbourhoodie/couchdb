@@ -423,8 +423,10 @@ check_doc_atts(Db, Doc) ->
             end
     end.
 
-add_sizes(Type, Leaf, Acc) ->
-    add_sizes_int(Type, Leaf, Acc).
+add_sizes(Type, #leaf{ptr = {_Gen, _Ptr}} = Leaf, Acc) ->
+    add_sizes_int(Type, Leaf, Acc);
+add_sizes(Type, #leaf{ptr = Ptr} = Leaf, Acc) ->
+    add_sizes_int(Type, Leaf#leaf{ptr = {0, Ptr}}, Acc).
 
 add_sizes_int(Type, Leaf, []) ->
     add_sizes_int(Type, Leaf, [{0, 0, []}]);

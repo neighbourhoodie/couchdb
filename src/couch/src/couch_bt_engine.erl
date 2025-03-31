@@ -403,8 +403,13 @@ open_local_docs(#st{} = St, DocIds) ->
         Results
     ).
 
-read_doc_body(#st{} = St, #doc{body = {Generation, Ptr}} = Doc) ->
-    Fd = get_fd(St#st.fds, Generation),
+read_doc_body(#st{} = St, #doc{} = Doc) ->
+    {Gen, Ptr} =
+        case Doc#doc.body of
+            {G, P} -> {G, P};
+            P -> {0, P}
+        end,
+    Fd = get_fd(St#st.fds, Gen),
     {ok, {Body, Atts}} = couch_file:pread_term(Fd, Ptr),
     Doc#doc{
         body = Body,
@@ -446,18 +451,19 @@ get_fd(Fds, Gen) ->
     % The one time zero-indexing would be useful *shakes fist*
     lists:nth(Gen + 1, Fds).
 
-write_doc_body(St, #doc{} = Doc, NewGeneration) ->
-    Fd = get_fd(St#st.fds, NewGeneration),
-    {ok, Ptr, Written} = couch_file:append_raw_chunk(Fd, Doc#doc.body),
-    {ok, Doc#doc{body = {NewGeneration, Ptr}}, Written}.
-
 write_doc_body(St, #doc{} = Doc) ->
-    #st{
-        fd = Fd
-    } = St,
-    {ok, Ptr, Written} = couch_file:append_raw_chunk(Fd, Doc#doc.body),
     % New doc bodies start with generation 0
-    {ok, Doc#doc{body = {0, Ptr}}, Written}.
+    write_doc_body(St, Doc, 0).
+
+write_doc_body(St, #doc{} = Doc, Gen) ->
+    Fd = get_fd(St#st.fds, Gen),
+    {ok, Ptr, Written} = couch_file:append_raw_chunk(Fd, Doc#doc.body),
+    GenPtr =
+        case Gen of
+            0 -> Ptr;
+            G -> {G, Ptr}
+        end,
+    {ok, Doc#doc{body = GenPtr}, Written}.
 
 write_doc_infos(#st{} = St, Pairs, LocalDocs) ->
     #st{
@@ -1103,20 +1109,20 @@ rev_tree(DiskTree) ->
             (_RevId, {Del, Ptr, Seq}) ->
                 #leaf{
                     deleted = ?i2b(Del),
-                    ptr = upgrade_pointer(Ptr),
+                    ptr = Ptr,
                     seq = Seq
                 };
             (_RevId, {Del, Ptr, Seq, Size}) ->
                 #leaf{
                     deleted = ?i2b(Del),
-                    ptr = upgrade_pointer(Ptr),
+                    ptr = Ptr,
                     seq = Seq,
                     sizes = couch_db_updater:upgrade_sizes(Size)
                 };
             (_RevId, {Del, Ptr, Seq, Sizes, Atts}) ->
                 #leaf{
                     deleted = ?i2b(Del),
-                    ptr = upgrade_pointer(Ptr),
+                    ptr = Ptr,
                     seq = Seq,
                     sizes = couch_db_updater:upgrade_sizes(Sizes),
                     atts = Atts
@@ -1140,15 +1146,15 @@ disk_tree(RevTree) ->
                     sizes = Sizes,
                     atts = Atts
                 } = Leaf,
-                {?b2i(Del), upgrade_pointer(Ptr), Seq, split_sizes(Sizes), Atts}
+                {?b2i(Del), canonical_pointer(Ptr), Seq, split_sizes(Sizes), Atts}
         end,
         RevTree
     ).
 
-upgrade_pointer({Gen, Ptr}) ->
-    {Gen, Ptr};
-upgrade_pointer(Ptr) when is_integer(Ptr) ->
-    {0, Ptr}.
+canonical_pointer({0, Ptr}) ->
+    Ptr;
+canonical_pointer(Ptr) ->
+    Ptr.
 
 split_sizes(#size_info{} = SI) ->
     {SI#size_info.active, SI#size_info.external};

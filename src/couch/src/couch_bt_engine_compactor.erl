@@ -414,6 +414,11 @@ set_generation(#st{max_generation = MaxGen} = St, NewGen) when NewGen > MaxGen -
 set_generation(St, _) ->
     St.
 
+upgrade_leaf_ptr({Gen, Ptr}) ->
+    {Gen, Ptr};
+upgrade_leaf_ptr(Ptr) when is_integer(Ptr) ->
+    {0, Ptr}.
+
 copy_docs(St, SrcGen, #st{} = NewSt, MixedInfos, Retry) ->
     DocInfoIds = [Id || #doc_info{id = Id} <- MixedInfos],
     LookupResults = couch_btree:lookup(St#st.id_tree, DocInfoIds),
@@ -429,7 +434,8 @@ copy_docs(St, SrcGen, #st{} = NewSt, MixedInfos, Retry) ->
         fun(Info) ->
             {NewRevTree, FinalAcc} = couch_key_tree:mapfold(
                 fun
-                    ({RevPos, RevId}, #leaf{ptr = {DocGen, _} = LeafPtr} = Leaf, leaf, SizesAcc) ->
+                    ({RevPos, RevId}, #leaf{ptr = LeafPtr} = Leaf, leaf, SizesAcc) ->
+                        {DocGen, _} = upgrade_leaf_ptr(LeafPtr),
                         DstGen = increment_generation(SrcGen),
                         {Body, AttsChanged, AttInfos} = copy_doc_attachments(
                             St, NewSt, LeafPtr, SrcGen, DstGen
@@ -551,7 +557,8 @@ copy_docs(St, SrcGen, #st{} = NewSt, MixedInfos, Retry) ->
     update_compact_task(length(NewInfos)),
     NewSt#st{id_tree = IdEms, seq_tree = SeqTree}.
 
-copy_doc_attachments(#st{} = SrcSt, DstSt, {DocGen, SrcSp}, SrcGen, DstGen) ->
+copy_doc_attachments(#st{} = SrcSt, DstSt, LeafPtr, SrcGen, DstGen) ->
+    {DocGen, SrcSp} = upgrade_leaf_ptr(LeafPtr),
     Fd = couch_bt_engine:get_fd(SrcSt#st.fds, DocGen),
     {ok, {BodyData, BinInfos0}} = couch_file:pread_term(Fd, SrcSp),
     BinInfos =
