@@ -431,14 +431,18 @@ copy_docs(St, SrcGeneration, #st{} = NewSt, MixedInfos, Retry) ->
         fun(Info) ->
             {NewRevTree, FinalAcc} = couch_key_tree:mapfold(
                 fun
-                    ({RevPos, RevId}, #leaf{ptr = {OldGeneration, Sp}} = Leaf, leaf, SizesAcc) when
-                        OldGeneration =:= SrcGeneration
-                    ->
-                        NewGeneration = increment_generation(OldGeneration),
+                    (
+                        {RevPos, RevId},
+                        #leaf{ptr = {DocGeneration, _} = LeafPtr} = Leaf,
+                        leaf,
+                        SizesAcc
+                    ) ->
+                        DstGeneration = increment_generation(SrcGeneration),
                         {Body, AttInfos} = copy_doc_attachments(
-                            St, {OldGeneration, Sp}, NewSt, NewGeneration
+                            St, NewSt, LeafPtr, SrcGeneration, DstGeneration
                         ),
-                        #size_info{external = OldExternalSize} = Leaf#leaf.sizes,
+                        #size_info{active = OldActiveSize, external = OldExternalSize} =
+                            Leaf#leaf.sizes,
                         ExternalSize =
                             case OldExternalSize of
                                 0 when is_binary(Body) ->
@@ -448,19 +452,32 @@ copy_docs(St, SrcGeneration, #st{} = NewSt, MixedInfos, Retry) ->
                                 N ->
                                     N
                             end,
-                        Doc0 = #doc{
-                            id = Info#full_doc_info.id,
-                            revs = {RevPos, [RevId]},
-                            deleted = Leaf#leaf.deleted,
-                            body = Body,
-                            atts = AttInfos
-                        },
-                        Doc1 = couch_bt_engine:serialize_doc(NewSt, Doc0),
-                        {ok, Doc2, ActiveSize} =
-                            couch_bt_engine:write_doc_body(NewSt, Doc1, NewGeneration),
+                        {NewPtr, ActiveSize} =
+                            case DocGeneration of
+                                Gen when Gen > 0 andalso Gen =/= SrcGeneration ->
+                                    {LeafPtr, OldActiveSize};
+                                _Else ->
+                                    Doc0 = #doc{
+                                        id = Info#full_doc_info.id,
+                                        revs = {RevPos, [RevId]},
+                                        deleted = Leaf#leaf.deleted,
+                                        body = Body,
+                                        atts = AttInfos
+                                    },
+                                    Doc1 = couch_bt_engine:serialize_doc(NewSt, Doc0),
+                                    NewGeneration =
+                                        case DocGeneration of
+                                            SrcGeneration -> DstGeneration;
+                                            _ -> DocGeneration
+                                        end,
+                                    {ok, Doc2, NewActiveSize} = couch_bt_engine:write_doc_body(
+                                        NewSt, Doc1, NewGeneration
+                                    ),
+                                    {Doc2#doc.body, NewActiveSize}
+                            end,
                         AttSizes = [{element(3, A), element(4, A)} || A <- AttInfos],
                         NewLeaf = Leaf#leaf{
-                            ptr = Doc2#doc.body,
+                            ptr = NewPtr,
                             sizes = #size_info{
                                 active = ActiveSize,
                                 external = ExternalSize
@@ -468,8 +485,6 @@ copy_docs(St, SrcGeneration, #st{} = NewSt, MixedInfos, Retry) ->
                             atts = AttSizes
                         },
                         {NewLeaf, couch_db_updater:add_sizes(leaf, NewLeaf, SizesAcc)};
-                    (_, #leaf{} = Leaf, leaf, SizesAcc) ->
-                        {Leaf, couch_db_updater:add_sizes(leaf, Leaf, SizesAcc)};
                     (_Rev, _Leaf, branch, SizesAcc) ->
                         {?REV_MISSING, SizesAcc}
                 end,
@@ -543,8 +558,8 @@ copy_docs(St, SrcGeneration, #st{} = NewSt, MixedInfos, Retry) ->
     update_compact_task(length(NewInfos)),
     NewSt#st{id_tree = IdEms, seq_tree = SeqTree}.
 
-copy_doc_attachments(#st{} = SrcSt, {OldGeneration, SrcSp}, DstSt, NewGeneration) ->
-    Fd = couch_bt_engine:get_fd(SrcSt#st.fds, OldGeneration),
+copy_doc_attachments(#st{} = SrcSt, DstSt, {DocGeneration, SrcSp}, SrcGeneration, DstGeneration) ->
+    Fd = couch_bt_engine:get_fd(SrcSt#st.fds, DocGeneration),
     {ok, {BodyData, BinInfos0}} = couch_file:pread_term(Fd, SrcSp),
     BinInfos =
         case BinInfos0 of
@@ -559,16 +574,25 @@ copy_doc_attachments(#st{} = SrcSt, {OldGeneration, SrcSp}, DstSt, NewGeneration
         fun
             ({Name, Type, BinSp, AttLen, RevPos, ExpectedMd5}) ->
                 % 010 UPGRADE CODE
+                NewGeneration = 0,
                 {ok, SrcStream} = couch_bt_engine:open_read_stream(SrcSt, BinSp),
-                {ok, DstStream} = couch_bt_engine:open_write_stream(DstSt, []),
+                {ok, DstStream} = couch_bt_engine:open_write_stream(DstSt, NewGeneration, []),
                 ok = couch_stream:copy(SrcStream, DstStream),
                 {NewStream, AttLen, AttLen, ActualMd5, _IdentityMd5} =
                     couch_stream:close(DstStream),
                 {ok, NewBinSp} = couch_stream:to_disk_term(NewStream),
                 couch_util:check_md5(ExpectedMd5, ActualMd5),
-                {Name, Type, NewBinSp, AttLen, AttLen, RevPos, ExpectedMd5, identity};
-            ({Name, Type, BinSp, AttLen, DiskLen, RevPos, ExpectedMd5, Enc1, _OldGeneration}) ->
-                {ok, SrcStream} = couch_bt_engine:open_read_stream(SrcSt, OldGeneration, BinSp),
+                {Name, Type, NewBinSp, AttLen, AttLen, RevPos, ExpectedMd5, identity,
+                    NewGeneration};
+            ({Name, Type, BinSp, AttLen, DiskLen, RevPos, ExpectedMd5, Enc1, AttGeneration}) when
+                AttGeneration =:= 0 orelse AttGeneration =:= SrcGeneration
+            ->
+                NewGeneration =
+                    case AttGeneration of
+                        SrcGeneration -> DstGeneration;
+                        _ -> AttGeneration
+                    end,
+                {ok, SrcStream} = couch_bt_engine:open_read_stream(SrcSt, AttGeneration, BinSp),
                 {ok, DstStream} = couch_bt_engine:open_write_stream(DstSt, NewGeneration, []),
                 ok = couch_stream:copy(SrcStream, DstStream),
                 {NewStream, AttLen, _, ActualMd5, _IdentityMd5} =
@@ -586,7 +610,9 @@ copy_doc_attachments(#st{} = SrcSt, {OldGeneration, SrcSp}, DstSt, NewGeneration
                         _ ->
                             Enc1
                     end,
-                {Name, Type, NewBinSp, AttLen, DiskLen, RevPos, ExpectedMd5, Enc, NewGeneration}
+                {Name, Type, NewBinSp, AttLen, DiskLen, RevPos, ExpectedMd5, Enc, NewGeneration};
+            (BinInfo) ->
+                BinInfo
         end,
         BinInfos
     ),

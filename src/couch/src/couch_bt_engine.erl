@@ -614,7 +614,7 @@ open_read_stream(#st{} = St, Generation, StreamSt) ->
     {ok, {couch_bt_engine_stream, {Fd, StreamSt}}}.
 
 is_active_stream(#st{} = St, {couch_bt_engine_stream, {Fd, _}}) ->
-    St#st.fd == Fd;
+    lists:member(Fd, St#st.fds);
 is_active_stream(_, _) ->
     false.
 
