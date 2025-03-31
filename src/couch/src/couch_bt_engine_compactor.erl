@@ -438,7 +438,7 @@ copy_docs(St, SrcGeneration, #st{} = NewSt, MixedInfos, Retry) ->
                         SizesAcc
                     ) ->
                         DstGeneration = increment_generation(SrcGeneration),
-                        {Body, AttInfos} = copy_doc_attachments(
+                        {Body, AttsChanged, AttInfos} = copy_doc_attachments(
                             St, NewSt, LeafPtr, SrcGeneration, DstGeneration
                         ),
                         #size_info{active = OldActiveSize, external = OldExternalSize} =
@@ -453,8 +453,8 @@ copy_docs(St, SrcGeneration, #st{} = NewSt, MixedInfos, Retry) ->
                                     N
                             end,
                         {NewPtr, ActiveSize} =
-                            case DocGeneration of
-                                Gen when Gen > 0 andalso Gen =/= SrcGeneration ->
+                            case {AttsChanged, DocGeneration} of
+                                {false, Gen} when Gen > 0 andalso Gen =/= SrcGeneration ->
                                     {LeafPtr, OldActiveSize};
                                 _Else ->
                                     Doc0 = #doc{
@@ -570,7 +570,7 @@ copy_doc_attachments(#st{} = SrcSt, DstSt, {DocGeneration, SrcSp}, SrcGeneration
                 BinInfos0
         end,
     % copy the bin values
-    NewBinInfos = lists:map(
+    NewBinInfos0 = lists:map(
         fun
             ({Name, Type, BinSp, AttLen, RevPos, ExpectedMd5}) ->
                 % 010 UPGRADE CODE
@@ -582,8 +582,9 @@ copy_doc_attachments(#st{} = SrcSt, DstSt, {DocGeneration, SrcSp}, SrcGeneration
                     couch_stream:close(DstStream),
                 {ok, NewBinSp} = couch_stream:to_disk_term(NewStream),
                 couch_util:check_md5(ExpectedMd5, ActualMd5),
-                {Name, Type, NewBinSp, AttLen, AttLen, RevPos, ExpectedMd5, identity,
-                    NewGeneration};
+                {true,
+                    {Name, Type, NewBinSp, AttLen, AttLen, RevPos, ExpectedMd5, identity,
+                        NewGeneration}};
             ({Name, Type, BinSp, AttLen, DiskLen, RevPos, ExpectedMd5, Enc1, AttGeneration}) when
                 AttGeneration =:= 0 orelse AttGeneration =:= SrcGeneration
             ->
@@ -610,13 +611,17 @@ copy_doc_attachments(#st{} = SrcSt, DstSt, {DocGeneration, SrcSp}, SrcGeneration
                         _ ->
                             Enc1
                     end,
-                {Name, Type, NewBinSp, AttLen, DiskLen, RevPos, ExpectedMd5, Enc, NewGeneration};
+                {true,
+                    {Name, Type, NewBinSp, AttLen, DiskLen, RevPos, ExpectedMd5, Enc,
+                        NewGeneration}};
             (BinInfo) ->
-                BinInfo
+                {false, BinInfo}
         end,
         BinInfos
     ),
-    {BodyData, NewBinInfos}.
+    {Statuses, NewBinInfos} = lists:unzip(NewBinInfos0),
+    Changed = lists:foldl(fun(A, B) -> A orelse B end, false, Statuses),
+    {BodyData, Changed, NewBinInfos}.
 
 sort_meta_data(#comp_st{new_st = St0} = CompSt) ->
     ?COMP_EVENT(md_sort_init),
