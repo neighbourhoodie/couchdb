@@ -54,14 +54,14 @@ max_generation() -> ?MAX_GENERATION.
 start(#st{} = St, DbName, ?MAX_GENERATION, Options, Parent) ->
     % TODO
     ok;
-start(#st{} = St, DbName, SrcGeneration, Options, Parent) when SrcGeneration < ?MAX_GENERATION ->
+start(#st{} = St, DbName, SrcGen, Options, Parent) when SrcGen < ?MAX_GENERATION ->
     erlang:put(io_priority, {db_compact, DbName}),
     couch_log:debug("Compaction process spawned for db \"~s\"", [DbName]),
 
     couch_db_engine:trigger_on_compact(DbName),
 
     ?COMP_EVENT(init),
-    {ok, InitCompSt} = open_compaction_files(DbName, SrcGeneration, St, Options),
+    {ok, InitCompSt} = open_compaction_files(DbName, SrcGen, St, Options),
     ?COMP_EVENT(files_opened),
 
     Stages = [
@@ -91,10 +91,10 @@ start(#st{} = St, DbName, SrcGeneration, Options, Parent) when SrcGeneration < ?
     ok = couch_file:close(MetaFd),
 
     ?COMP_EVENT(before_notify),
-    Msg = {compact_done, couch_bt_engine, {FinalNewSt#st.filepath, SrcGeneration}},
+    Msg = {compact_done, couch_bt_engine, {FinalNewSt#st.filepath, SrcGen}},
     gen_server:cast(Parent, Msg).
 
-open_compaction_files(DbName, SrcGeneration, OldSt, Options) ->
+open_compaction_files(DbName, SrcGen, OldSt, Options) ->
     #st{
         filepath = DbFilePath,
         header = SrcHdr
@@ -116,7 +116,7 @@ open_compaction_files(DbName, SrcGeneration, OldSt, Options) ->
                 St1 = bind_emsort(St0, MetaFd, A#comp_header.meta_st),
                 #comp_st{
                     db_name = DbName,
-                    src_generation = SrcGeneration,
+                    src_generation = SrcGen,
                     old_st = OldSt,
                     new_st = St1,
                     meta_fd = MetaFd,
@@ -134,7 +134,7 @@ open_compaction_files(DbName, SrcGeneration, OldSt, Options) ->
                 St1 = bind_emsort(St0, MetaFd, nil),
                 #comp_st{
                     db_name = DbName,
-                    src_generation = SrcGeneration,
+                    src_generation = SrcGen,
                     old_st = OldSt,
                     new_st = St1,
                     meta_fd = MetaFd,
@@ -154,7 +154,7 @@ open_compaction_files(DbName, SrcGeneration, OldSt, Options) ->
                 St1 = bind_emsort(St0, MetaFd, nil),
                 #comp_st{
                     db_name = DbName,
-                    src_generation = SrcGeneration,
+                    src_generation = SrcGen,
                     old_st = OldSt,
                     new_st = St1,
                     meta_fd = MetaFd,
@@ -302,7 +302,7 @@ copy_purge_infos(OldSt, NewSt0, Infos, MinPurgeSeq, Retry) ->
 copy_compact(#comp_st{} = CompSt) ->
     #comp_st{
         db_name = DbName,
-        src_generation = SrcGeneration,
+        src_generation = SrcGen,
         old_st = St,
         new_st = NewSt0,
         retry = Retry
@@ -339,7 +339,7 @@ copy_compact(#comp_st{} = CompSt) ->
             if
                 AccUncopiedSize2 >= BufferSize ->
                     NewSt2 = copy_docs(
-                        St, SrcGeneration, AccNewSt, lists:reverse([DocInfo | AccUncopied]), Retry
+                        St, SrcGen, AccNewSt, lists:reverse([DocInfo | AccUncopied]), Retry
                     ),
                     AccCopiedSize2 = AccCopiedSize + AccUncopiedSize2,
                     if
@@ -387,7 +387,7 @@ copy_compact(#comp_st{} = CompSt) ->
             [{start_key, NewUpdateSeq + 1}]
         ),
 
-    NewSt3 = copy_docs(St, SrcGeneration, NewSt2, lists:reverse(Uncopied), Retry),
+    NewSt3 = copy_docs(St, SrcGen, NewSt2, lists:reverse(Uncopied), Retry),
 
     ?COMP_EVENT(seq_done),
 
@@ -409,14 +409,12 @@ copy_compact(#comp_st{} = CompSt) ->
 increment_generation(?MAX_GENERATION) -> ?MAX_GENERATION;
 increment_generation(N) -> N + 1.
 
-set_generation(#st{max_generation = MaxGeneration} = St, NewGeneration) when
-    NewGeneration > MaxGeneration
-->
-    St#st{max_generation = NewGeneration};
+set_generation(#st{max_generation = MaxGen} = St, NewGen) when NewGen > MaxGen ->
+    St#st{max_generation = NewGen};
 set_generation(St, _) ->
     St.
 
-copy_docs(St, SrcGeneration, #st{} = NewSt, MixedInfos, Retry) ->
+copy_docs(St, SrcGen, #st{} = NewSt, MixedInfos, Retry) ->
     DocInfoIds = [Id || #doc_info{id = Id} <- MixedInfos],
     LookupResults = couch_btree:lookup(St#st.id_tree, DocInfoIds),
     % COUCHDB-968, make sure we prune duplicates during compaction
@@ -431,15 +429,10 @@ copy_docs(St, SrcGeneration, #st{} = NewSt, MixedInfos, Retry) ->
         fun(Info) ->
             {NewRevTree, FinalAcc} = couch_key_tree:mapfold(
                 fun
-                    (
-                        {RevPos, RevId},
-                        #leaf{ptr = {DocGeneration, _} = LeafPtr} = Leaf,
-                        leaf,
-                        SizesAcc
-                    ) ->
-                        DstGeneration = increment_generation(SrcGeneration),
+                    ({RevPos, RevId}, #leaf{ptr = {DocGen, _} = LeafPtr} = Leaf, leaf, SizesAcc) ->
+                        DstGen = increment_generation(SrcGen),
                         {Body, AttsChanged, AttInfos} = copy_doc_attachments(
-                            St, NewSt, LeafPtr, SrcGeneration, DstGeneration
+                            St, NewSt, LeafPtr, SrcGen, DstGen
                         ),
                         #size_info{active = OldActiveSize, external = OldExternalSize} =
                             Leaf#leaf.sizes,
@@ -453,8 +446,8 @@ copy_docs(St, SrcGeneration, #st{} = NewSt, MixedInfos, Retry) ->
                                     N
                             end,
                         {NewPtr, ActiveSize} =
-                            case {AttsChanged, DocGeneration} of
-                                {false, Gen} when Gen > 0 andalso Gen =/= SrcGeneration ->
+                            case {AttsChanged, DocGen} of
+                                {false, Gen} when Gen > 0 andalso Gen =/= SrcGen ->
                                     {LeafPtr, OldActiveSize};
                                 _Else ->
                                     Doc0 = #doc{
@@ -465,13 +458,13 @@ copy_docs(St, SrcGeneration, #st{} = NewSt, MixedInfos, Retry) ->
                                         atts = AttInfos
                                     },
                                     Doc1 = couch_bt_engine:serialize_doc(NewSt, Doc0),
-                                    NewGeneration =
-                                        case DocGeneration of
-                                            SrcGeneration -> DstGeneration;
-                                            _ -> DocGeneration
+                                    NewGen =
+                                        case DocGen of
+                                            SrcGen -> DstGen;
+                                            _ -> DocGen
                                         end,
                                     {ok, Doc2, NewActiveSize} = couch_bt_engine:write_doc_body(
-                                        NewSt, Doc1, NewGeneration
+                                        NewSt, Doc1, NewGen
                                     ),
                                     {Doc2#doc.body, NewActiveSize}
                             end,
@@ -558,8 +551,8 @@ copy_docs(St, SrcGeneration, #st{} = NewSt, MixedInfos, Retry) ->
     update_compact_task(length(NewInfos)),
     NewSt#st{id_tree = IdEms, seq_tree = SeqTree}.
 
-copy_doc_attachments(#st{} = SrcSt, DstSt, {DocGeneration, SrcSp}, SrcGeneration, DstGeneration) ->
-    Fd = couch_bt_engine:get_fd(SrcSt#st.fds, DocGeneration),
+copy_doc_attachments(#st{} = SrcSt, DstSt, {DocGen, SrcSp}, SrcGen, DstGen) ->
+    Fd = couch_bt_engine:get_fd(SrcSt#st.fds, DocGen),
     {ok, {BodyData, BinInfos0}} = couch_file:pread_term(Fd, SrcSp),
     BinInfos =
         case BinInfos0 of
@@ -574,27 +567,26 @@ copy_doc_attachments(#st{} = SrcSt, DstSt, {DocGeneration, SrcSp}, SrcGeneration
         fun
             ({Name, Type, BinSp, AttLen, RevPos, ExpectedMd5}) ->
                 % 010 UPGRADE CODE
-                NewGeneration = 0,
+                NewGen = 0,
                 {ok, SrcStream} = couch_bt_engine:open_read_stream(SrcSt, BinSp),
-                {ok, DstStream} = couch_bt_engine:open_write_stream(DstSt, NewGeneration, []),
+                {ok, DstStream} = couch_bt_engine:open_write_stream(DstSt, NewGen, []),
                 ok = couch_stream:copy(SrcStream, DstStream),
                 {NewStream, AttLen, AttLen, ActualMd5, _IdentityMd5} =
                     couch_stream:close(DstStream),
                 {ok, NewBinSp} = couch_stream:to_disk_term(NewStream),
                 couch_util:check_md5(ExpectedMd5, ActualMd5),
                 {true,
-                    {Name, Type, NewBinSp, AttLen, AttLen, RevPos, ExpectedMd5, identity,
-                        NewGeneration}};
-            ({Name, Type, BinSp, AttLen, DiskLen, RevPos, ExpectedMd5, Enc1, AttGeneration}) when
-                AttGeneration =:= 0 orelse AttGeneration =:= SrcGeneration
+                    {Name, Type, NewBinSp, AttLen, AttLen, RevPos, ExpectedMd5, identity, NewGen}};
+            ({Name, Type, BinSp, AttLen, DiskLen, RevPos, ExpectedMd5, Enc1, AttGen}) when
+                AttGen =:= 0 orelse AttGen =:= SrcGen
             ->
-                NewGeneration =
-                    case AttGeneration of
-                        SrcGeneration -> DstGeneration;
-                        _ -> AttGeneration
+                NewGen =
+                    case AttGen of
+                        SrcGen -> DstGen;
+                        _ -> AttGen
                     end,
-                {ok, SrcStream} = couch_bt_engine:open_read_stream(SrcSt, AttGeneration, BinSp),
-                {ok, DstStream} = couch_bt_engine:open_write_stream(DstSt, NewGeneration, []),
+                {ok, SrcStream} = couch_bt_engine:open_read_stream(SrcSt, AttGen, BinSp),
+                {ok, DstStream} = couch_bt_engine:open_write_stream(DstSt, NewGen, []),
                 ok = couch_stream:copy(SrcStream, DstStream),
                 {NewStream, AttLen, _, ActualMd5, _IdentityMd5} =
                     couch_stream:close(DstStream),
@@ -611,9 +603,7 @@ copy_doc_attachments(#st{} = SrcSt, DstSt, {DocGeneration, SrcSp}, SrcGeneration
                         _ ->
                             Enc1
                     end,
-                {true,
-                    {Name, Type, NewBinSp, AttLen, DiskLen, RevPos, ExpectedMd5, Enc,
-                        NewGeneration}};
+                {true, {Name, Type, NewBinSp, AttLen, DiskLen, RevPos, ExpectedMd5, Enc, NewGen}};
             (BinInfo) ->
                 {false, BinInfo}
         end,
