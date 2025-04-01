@@ -69,9 +69,8 @@
     commit_data/1,
 
     open_write_stream/2,
-    open_read_stream/2,
     open_write_stream/3,
-    open_read_stream/3,
+    open_read_stream/2,
     is_active_stream/2,
 
     fold_docs/4,
@@ -606,20 +605,19 @@ commit_data(St) ->
     end.
 
 open_write_stream(#st{} = St, Options) ->
-    couch_stream:open({couch_bt_engine_stream, {St#st.fd, []}}, Options).
+    open_write_stream(St, 0, Options).
 
-open_write_stream(#st{} = St, Generation, Options) ->
-    Fd = get_fd(St#st.fds, Generation),
-    couch_stream:open({couch_bt_engine_stream, {Fd, []}}, Options).
+open_write_stream(#st{} = St, Gen, Options) ->
+    Fd = get_fd(St#st.fds, Gen),
+    couch_stream:open({couch_bt_engine_stream, {Fd, Gen, []}}, Options).
 
-open_read_stream(#st{} = St, StreamSt) ->
-    {ok, {couch_bt_engine_stream, {St#st.fd, StreamSt}}}.
+open_read_stream(#st{} = St, {Gen, StreamSt}) ->
+    Fd = get_fd(St#st.fds, Gen),
+    {ok, {couch_bt_engine_stream, {Fd, Gen, StreamSt}}};
+open_read_stream(#st{} = St, StreamSt) when is_list(StreamSt) ->
+    open_read_stream(St, {0, StreamSt}).
 
-open_read_stream(#st{} = St, Generation, StreamSt) ->
-    Fd = get_fd(St#st.fds, Generation),
-    {ok, {couch_bt_engine_stream, {Fd, StreamSt}}}.
-
-is_active_stream(#st{} = St, {couch_bt_engine_stream, {Fd, _}}) ->
+is_active_stream(#st{} = St, {couch_bt_engine_stream, {Fd, _, _}}) ->
     lists:member(Fd, St#st.fds);
 is_active_stream(_, _) ->
     false.

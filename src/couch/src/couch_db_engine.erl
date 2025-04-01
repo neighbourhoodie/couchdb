@@ -472,10 +472,6 @@
 % See the documentation for open_write_stream
 -callback open_read_stream(DbHandle :: db_handle(), StreamDiskInfo :: any()) ->
     {ok, {Module :: atom(), ReadStreamState :: any()}}.
--callback open_read_stream(
-    DbHandle :: db_handle(), StreamDiskInfo :: any(), Generation :: non_neg_integer()
-) ->
-    {ok, {Module :: atom(), ReadStreamState :: any()}}.
 
 % See the documentation for open_write_stream
 -callback is_active_stream(DbHandle :: db_handle(), ReadStreamState :: any()) ->
@@ -708,7 +704,6 @@
 
     open_write_stream/2,
     open_read_stream/2,
-    open_read_stream/3,
     is_active_stream/2,
 
     fold_docs/4,
@@ -931,10 +926,6 @@ open_write_stream(#db{} = Db, Options) ->
 open_read_stream(#db{} = Db, StreamDiskInfo) ->
     #db{engine = {Engine, EngineState}} = Db,
     Engine:open_read_stream(EngineState, StreamDiskInfo).
-
-open_read_stream(#db{} = Db, Generation, StreamDiskInfo) ->
-    #db{engine = {Engine, EngineState}} = Db,
-    Engine:open_read_stream(EngineState, Generation, StreamDiskInfo).
 
 is_active_stream(#db{} = Db, ReadStreamState) ->
     #db{engine = {Engine, EngineState}} = Db,

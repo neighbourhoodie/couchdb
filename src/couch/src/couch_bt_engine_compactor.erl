@@ -453,7 +453,7 @@ copy_docs(St, SrcGen, #st{} = NewSt, MixedInfos, Retry) ->
                             end,
                         {NewPtr, ActiveSize} =
                             case {AttsChanged, DocGen} of
-                                {false, Gen} when Gen > 0 andalso Gen =/= SrcGen ->
+                                {false, Gen} when Gen > 0, Gen =/= SrcGen ->
                                     {LeafPtr, OldActiveSize};
                                 _Else ->
                                     Doc0 = #doc{
@@ -574,25 +574,31 @@ copy_doc_attachments(#st{} = SrcSt, DstSt, LeafPtr, SrcGen, DstGen) ->
         fun
             ({Name, Type, BinSp, AttLen, RevPos, ExpectedMd5}) ->
                 % 010 UPGRADE CODE
-                NewGen = 0,
                 {ok, SrcStream} = couch_bt_engine:open_read_stream(SrcSt, BinSp),
-                {ok, DstStream} = couch_bt_engine:open_write_stream(DstSt, NewGen, []),
+                {ok, DstStream} = couch_bt_engine:open_write_stream(DstSt, []),
                 ok = couch_stream:copy(SrcStream, DstStream),
                 {NewStream, AttLen, AttLen, ActualMd5, _IdentityMd5} =
                     couch_stream:close(DstStream),
                 {ok, NewBinSp} = couch_stream:to_disk_term(NewStream),
                 couch_util:check_md5(ExpectedMd5, ActualMd5),
-                {true,
-                    {Name, Type, NewBinSp, AttLen, AttLen, RevPos, ExpectedMd5, identity, NewGen}};
-            ({Name, Type, BinSp, AttLen, DiskLen, RevPos, ExpectedMd5, Enc1, AttGen}) when
-                AttGen =:= 0 orelse AttGen =:= SrcGen
-            ->
+                {true, {Name, Type, NewBinSp, AttLen, AttLen, RevPos, ExpectedMd5, identity}};
+            (
+                {_Name, _Type, {AttGen, _BinSp}, _AttLen, _DiskLen, _RevPos, _ExpectedMd5, _Enc1} =
+                    BinInfo
+            ) when AttGen =/= SrcGen ->
+                {false, BinInfo};
+            ({Name, Type, BinSp, AttLen, DiskLen, RevPos, ExpectedMd5, Enc1}) ->
+                AttGen =
+                    case BinSp of
+                        {AttG, Sp} -> AttG;
+                        _ -> 0
+                    end,
                 NewGen =
                     case AttGen of
                         SrcGen -> DstGen;
                         _ -> AttGen
                     end,
-                {ok, SrcStream} = couch_bt_engine:open_read_stream(SrcSt, AttGen, BinSp),
+                {ok, SrcStream} = couch_bt_engine:open_read_stream(SrcSt, BinSp),
                 {ok, DstStream} = couch_bt_engine:open_write_stream(DstSt, NewGen, []),
                 ok = couch_stream:copy(SrcStream, DstStream),
                 {NewStream, AttLen, _, ActualMd5, _IdentityMd5} =
@@ -610,9 +616,7 @@ copy_doc_attachments(#st{} = SrcSt, DstSt, LeafPtr, SrcGen, DstGen) ->
                         _ ->
                             Enc1
                     end,
-                {true, {Name, Type, NewBinSp, AttLen, DiskLen, RevPos, ExpectedMd5, Enc, NewGen}};
-            (BinInfo) ->
-                {false, BinInfo}
+                {true, {Name, Type, NewBinSp, AttLen, DiskLen, RevPos, ExpectedMd5, Enc}}
         end,
         BinInfos
     ),
