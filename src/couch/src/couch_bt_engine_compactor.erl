@@ -145,11 +145,7 @@ open_compaction_files(DbName, SrcGen, OldSt, Options) ->
                 Header = couch_bt_engine_header:from(SrcHdr),
                 ok = reset_compaction_file(DataFd, Header),
                 ok = reset_compaction_file(MetaFd, Header),
-                Generations0 = couch_bt_engine_header:generations(Header),
-                Generations = increment_generation(Generations0),
-                % we need one more generation to compact into, maybe
-                GenFds = couch_bt_engine:open_generation_files(DbFilePath, Generations, Options),
-                Fds = [DataFd] ++ GenFds,
+                Fds = [DataFd | OldSt#st.gen_fds],
                 St0 = couch_bt_engine:init_state(DataFile, Fds, Header, Options),
                 St1 = bind_emsort(St0, MetaFd, nil),
                 #comp_st{
@@ -559,7 +555,7 @@ copy_docs(St, SrcGen, #st{} = NewSt, MixedInfos, Retry) ->
 
 copy_doc_attachments(#st{} = SrcSt, DstSt, LeafPtr, SrcGen, DstGen) ->
     {DocGen, SrcSp} = upgrade_leaf_ptr(LeafPtr),
-    Fd = couch_bt_engine:get_fd(SrcSt#st.fds, DocGen),
+    Fd = couch_bt_engine:get_fd(SrcSt, DocGen),
     {ok, {BodyData, BinInfos0}} = couch_file:pread_term(Fd, SrcSp),
     BinInfos =
         case BinInfos0 of

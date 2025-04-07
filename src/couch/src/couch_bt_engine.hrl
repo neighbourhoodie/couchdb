@@ -24,7 +24,7 @@
     compression,
     purge_tree,
     purge_seq_tree,
-    fds = [],
+    gen_fds = [],
     max_generation = 0
 }).
 

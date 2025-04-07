@@ -110,8 +110,7 @@
 -export([
     update_header/2,
     copy_security/2,
-    copy_props/2,
-    open_generation_files/3
+    copy_props/2
 ]).
 
 -include_lib("kernel/include/file.hrl").
@@ -173,17 +172,8 @@ init(FilePath, Options) ->
                 end
         end,
 
-    Generations = couch_bt_engine_header:generations(Header),
-
-    Fds0 = maybe_open_generation_files(FilePath, Generations, Options),
-    Fds = [Fd] ++ Fds0,
-    {ok, init_state(FilePath, Fds, Header, Options)}.
-
-maybe_open_generation_files(FilePath, Generations, Options) ->
-    case lists:member(compacting, Options) of
-        true -> [];
-        false -> open_generation_files(FilePath, Generations, Options)
-    end.
+    GenFds = maybe_open_generation_files(FilePath, ?MAX_GENERATION, Options),
+    {ok, init_state(FilePath, [Fd | GenFds], Header, Options)}.
 
 terminate(_Reason, St) ->
     % If the reason we died is because our fd disappeared
@@ -267,7 +257,7 @@ get_size_info(#st{} = St) ->
     SizeInfo = upgrade_sizes(element(3, DbReduction)),
     lists:zipwith(
         fun(Gen, SI) ->
-            Fd = get_fd(St#st.fds, Gen - 1),
+            Fd = get_fd(St, Gen - 1),
             {ok, FileSize} = couch_file:bytes(Fd),
             ActiveSize = active_size(St, SI),
             ExternalSize = SI#size_info.external,
@@ -408,7 +398,7 @@ read_doc_body(#st{} = St, #doc{} = Doc) ->
             {G, P} -> {G, P};
             P -> {0, P}
         end,
-    Fd = get_fd(St#st.fds, Gen),
+    Fd = get_fd(St, Gen),
     {ok, {Body, Atts}} = couch_file:pread_term(Fd, Ptr),
     Doc#doc{
         body = Body,
@@ -446,16 +436,17 @@ serialize_doc(#st{} = St, #doc{} = Doc) ->
         meta = [{comp_body, Body} | Doc#doc.meta]
     }.
 
-get_fd(Fds, Gen) ->
-    % The one time zero-indexing would be useful *shakes fist*
-    lists:nth(Gen + 1, Fds).
+get_fd(#st{fd = Fd}, 0) ->
+    Fd;
+get_fd(#st{gen_fds = GenFds}, Gen) ->
+    lists:nth(Gen, GenFds).
 
 write_doc_body(St, #doc{} = Doc) ->
     % New doc bodies start with generation 0
     write_doc_body(St, Doc, 0).
 
 write_doc_body(St, #doc{} = Doc, Gen) ->
-    Fd = get_fd(St#st.fds, Gen),
+    Fd = get_fd(St, Gen),
     {ok, Ptr, Written} = couch_file:append_raw_chunk(Fd, Doc#doc.body),
     GenPtr =
         case Gen of
@@ -608,17 +599,18 @@ open_write_stream(#st{} = St, Options) ->
     open_write_stream(St, 0, Options).
 
 open_write_stream(#st{} = St, Gen, Options) ->
-    Fd = get_fd(St#st.fds, Gen),
+    Fd = get_fd(St, Gen),
     couch_stream:open({couch_bt_engine_stream, {Fd, Gen, []}}, Options).
 
 open_read_stream(#st{} = St, {Gen, StreamSt}) ->
-    Fd = get_fd(St#st.fds, Gen),
+    Fd = get_fd(St, Gen),
     {ok, {couch_bt_engine_stream, {Fd, Gen, StreamSt}}};
 open_read_stream(#st{} = St, StreamSt) when is_list(StreamSt) ->
     open_read_stream(St, {0, StreamSt}).
 
 is_active_stream(#st{} = St, {couch_bt_engine_stream, {Fd, _, _}}) ->
-    lists:member(Fd, St#st.fds);
+    Fds = [St#st.fd | St#st.gen_fds],
+    lists:member(Fd, Fds);
 is_active_stream(_, _) ->
     false.
 
@@ -924,8 +916,23 @@ open_generation_files(FilePath, Generations, Options) ->
         lists:seq(1, Generations)
     ).
 
+maybe_open_generation_files(FilePath, Generations, Options) ->
+    case lists:member(compacting, Options) of
+        true -> [];
+        false -> open_generation_files(FilePath, Generations, Options)
+    end.
+
+replace_generation_file(FilePath, Fds, Gen) ->
+    replace_generation_file(FilePath, Gen, Fds, Gen).
+
+replace_generation_file(FilePath, Gen, [_ | Fds], 1) ->
+    Fd = open_generation_file(FilePath, Gen, []),
+    [Fd | Fds];
+replace_generation_file(FilePath, Gen, [Fd | Fds], G) ->
+    [Fd | replace_generation_file(FilePath, Gen, Fds, G - 1)].
+
 init_state(FilePath, Fds, Header0, Options) ->
-    [Fd | _] = Fds,
+    [Fd | GenFds] = Fds,
     ok = couch_file:sync(Fd),
 
     Compression = couch_compress:get_compression_method(),
@@ -985,7 +992,7 @@ init_state(FilePath, Fds, Header0, Options) ->
         compression = Compression,
         purge_tree = PurgeTree,
         purge_seq_tree = PurgeSeqTree,
-        fds = Fds
+        gen_fds = GenFds
     },
 
     % If this is a new database we've just created a
@@ -1266,13 +1273,6 @@ fold_docs_reduce_to_count(Reds) ->
     FinalRed = couch_btree:final_reduce(RedFun, Reds),
     element(1, FinalRed).
 
-open_missing_generation_files(FilePath, Fds) when length(Fds) =:= 1 + ?MAX_GENERATION ->
-    Fds;
-open_missing_generation_files(FilePath, Fds) ->
-    NextGeneration = length(Fds),
-    Fd = open_generation_file(FilePath, NextGeneration, []),
-    open_missing_generation_files(FilePath, Fds ++ [Fd]).
-
 finish_compaction_int(#st{} = OldSt, #st{} = NewSt1, Generation) ->
     #st{
         filepath = FilePath,
@@ -1316,30 +1316,32 @@ finish_compaction_int(#st{} = OldSt, #st{} = NewSt1, Generation) ->
     % the compaction file.
     couch_file:delete(RootDir, FilePath ++ ".compact.meta"),
 
-    % Delete the old generation file; at this point all its live data should
-    % have been promoted to the next generation, and the active .couch file is
-    % no longer pointing to anything in the old file
-    case generation_file_path(FilePath, Generation) of
-        FilePath -> noop;
-        GenFilePath -> couch_file:delete(RootDir, GenFilePath)
-    end,
+    % Assuming that the compactor is the only process that writes to generation
+    % files, and there is only one compaction per shard running at any time,
+    % then the compacted generation file G will have had all its data moved to
+    % G+1 and it will not have gained any data from G-1. Therefore it is empty,
+    % contains no data referenced by the root .couch file, and can be deleted
+    % and a fresh file opened in its place.
 
-    % maybe open new generation file
-    % TODO: only open the generation file that's one above the compacted generation
-    OldFds = NewSt2#st.fds,
-    Fds = open_missing_generation_files(FilePath, OldFds),
+    GenFds =
+        case generation_file_path(FilePath, Generation) of
+            FilePath ->
+                OldSt#st.gen_fds;
+            GenFilePath ->
+                couch_file:delete(RootDir, GenFilePath),
+                replace_generation_file(FilePath, OldSt#st.gen_fds, Generation)
+        end,
 
     % We're finished with our old state
     decref(OldSt),
 
     % And return our finished new state
-
-    NewSt3 = NewSt2#st{
-        filepath = FilePath,
-        fds = Fds
-    },
-
-    {ok, NewSt3, undefined}.
+    {ok,
+        NewSt2#st{
+            filepath = FilePath,
+            gen_fds = GenFds
+        },
+        undefined}.
 
 is_file(Path) ->
     case file:read_file_info(Path, [raw]) of
