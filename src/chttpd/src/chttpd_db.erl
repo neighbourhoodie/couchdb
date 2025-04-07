@@ -428,9 +428,10 @@ handle_design_info_req(Req, _Db, _DDoc) ->
 create_db_req(#httpd{} = Req, DbName) ->
     couch_httpd:verify_is_server_admin(Req),
     ShardsOpt = parse_shards_opt(Req),
+    MaxGenOpt = parse_generations_opt(Req),
     EngineOpt = parse_engine_opt(Req),
     DbProps = parse_partitioned_opt(Req),
-    Options = lists:append([ShardsOpt, [{props, DbProps}], EngineOpt]),
+    Options = lists:append([ShardsOpt, MaxGenOpt, [{props, DbProps}], EngineOpt]),
     DocUrl = absolute_uri(Req, "/" ++ couch_util:url_encode(DbName)),
     case fabric:create_db(DbName, Options) of
         ok ->
@@ -1983,6 +1984,10 @@ parse_shards_opt(Param, Req, Default) ->
         true -> Val;
         false -> throw({bad_request, Err})
     end.
+
+parse_generations_opt(Req) ->
+    Val = chttpd:qs_value(Req, "gen", "0"),
+    [{max_generation, list_to_integer(Val)}].
 
 parse_engine_opt(Req) ->
     case chttpd:qs_value(Req, "engine") of

@@ -188,7 +188,7 @@ cdb-req () {
 create-db () {
   cdb "/$db" -X DELETE
   rm -f $DATA/$db*
-  cdb "/$db?q=1" -X PUT
+  cdb "/$db?q=1&gen=3" -X PUT
   suffix="$(cdb "/$db" | jq -r '.instance_start_time')"
 }
 

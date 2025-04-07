@@ -24,8 +24,5 @@
     compression,
     purge_tree,
     purge_seq_tree,
-    gen_fds = [],
-    max_generation = 0
+    gen_fds = []
 }).
-
--define(MAX_GENERATION, 3).

@@ -13,8 +13,7 @@
 -module(couch_bt_engine_compactor).
 
 -export([
-    start/5,
-    max_generation/0
+    start/5
 ]).
 
 -include_lib("couch/include/couch_db.hrl").
@@ -49,12 +48,7 @@
 -define(COMP_EVENT(Name), ignore).
 -endif.
 
-max_generation() -> ?MAX_GENERATION.
-
-start(#st{} = St, DbName, ?MAX_GENERATION, Options, Parent) ->
-    % TODO
-    ok;
-start(#st{} = St, DbName, SrcGen, Options, Parent) when SrcGen < ?MAX_GENERATION ->
+start(#st{} = St, DbName, SrcGen, Options, Parent) ->
     erlang:put(io_priority, {db_compact, DbName}),
     couch_log:debug("Compaction process spawned for db \"~s\"", [DbName]),
 
@@ -402,13 +396,11 @@ copy_compact(#comp_st{} = CompSt) ->
         new_st = NewSt6
     }.
 
-increment_generation(?MAX_GENERATION) -> ?MAX_GENERATION;
-increment_generation(N) -> N + 1.
-
-set_generation(#st{max_generation = MaxGen} = St, NewGen) when NewGen > MaxGen ->
-    St#st{max_generation = NewGen};
-set_generation(St, _) ->
-    St.
+increment_generation(#st{gen_fds = Fds}, Gen) ->
+    if
+        Gen < length(Fds) -> Gen + 1;
+        true -> length(Fds)
+    end.
 
 upgrade_leaf_ptr({Gen, Ptr}) ->
     {Gen, Ptr};
@@ -432,7 +424,7 @@ copy_docs(St, SrcGen, #st{} = NewSt, MixedInfos, Retry) ->
                 fun
                     ({RevPos, RevId}, #leaf{ptr = LeafPtr} = Leaf, leaf, SizesAcc) ->
                         {DocGen, _} = upgrade_leaf_ptr(LeafPtr),
-                        DstGen = increment_generation(SrcGen),
+                        DstGen = increment_generation(St, SrcGen),
                         {Body, AttsChanged, AttInfos} = copy_doc_attachments(
                             St, NewSt, LeafPtr, SrcGen, DstGen
                         ),
@@ -685,15 +677,10 @@ copy_meta_data(#comp_st{new_st = St} = CompSt) ->
 
 compact_final_sync(#comp_st{new_st = St0} = CompSt) ->
     ?COMP_EVENT(before_final_sync),
-    Generations = couch_bt_engine_header:generations(St0#st.header),
-    NewHeader = couch_bt_engine_header:set(
-        St0#st.header, generations, increment_generation(Generations)
-    ),
-    St1 = St0#st{header = NewHeader},
-    {ok, St2} = couch_bt_engine:commit_data(St1),
+    {ok, St1} = couch_bt_engine:commit_data(St0),
     ?COMP_EVENT(after_final_sync),
     CompSt#comp_st{
-        new_st = St2
+        new_st = St1
     }.
 
 open_compaction_file(FilePath) ->

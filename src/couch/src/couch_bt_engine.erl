@@ -158,8 +158,10 @@ init(FilePath, Options) ->
                 delete_compaction_files(FilePath),
                 Header0 = couch_bt_engine_header:new(),
                 Header1 = init_set_props(Fd, Header0, Options),
-                ok = couch_file:write_header(Fd, Header1),
-                Header1;
+                MaxGen = proplists:get_value(max_generation, Options, 0),
+                Header2 = couch_bt_engine_header:set(Header1, [{max_generation, MaxGen}]),
+                ok = couch_file:write_header(Fd, Header2),
+                Header2;
             false ->
                 case couch_file:read_header(Fd) of
                     {ok, Header0} ->
@@ -172,7 +174,8 @@ init(FilePath, Options) ->
                 end
         end,
 
-    GenFds = maybe_open_generation_files(FilePath, ?MAX_GENERATION, Options),
+    OpenGen = couch_bt_engine_header:max_generation(Header),
+    GenFds = maybe_open_generation_files(FilePath, OpenGen, Options),
     {ok, init_state(FilePath, [Fd | GenFds], Header, Options)}.
 
 terminate(_Reason, St) ->

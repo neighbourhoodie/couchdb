@@ -39,7 +39,7 @@
     uuid/1,
     epochs/1,
     compacted_seq/1,
-    generations/1
+    max_generation/1
 ]).
 
 -include_lib("stdlib/include/assert.hrl").
@@ -73,7 +73,7 @@
     compacted_seq,
     purge_infos_limit = 1000,
     props_ptr,
-    generations = 0
+    max_generation = 0
 }).
 
 -define(PARTITION_DISK_VERSION, 8).
@@ -90,7 +90,7 @@ from(Header0) ->
         uuid = Header#db_header.uuid,
         epochs = Header#db_header.epochs,
         compacted_seq = Header#db_header.compacted_seq,
-        generations = Header#db_header.generations
+        max_generation = Header#db_header.max_generation
     }.
 
 is_header(Header) ->
@@ -182,8 +182,8 @@ compacted_seq(Header) ->
 purge_infos_limit(Header) ->
     get_field(Header, purge_infos_limit).
 
-generations(Header) ->
-    get_field(Header, generations, 0).
+max_generation(Header) ->
+    get_field(Header, max_generation, 0).
 
 get_field(Header, Field) ->
     get_field(Header, Field, undefined).
