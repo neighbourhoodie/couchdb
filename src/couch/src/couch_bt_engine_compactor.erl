@@ -48,9 +48,12 @@
 -define(COMP_EVENT(Name), ignore).
 -endif.
 
-start(#st{} = St, DbName, SrcGen, Options, Parent) ->
+start(#st{header = Header} = St, DbName, SrcGen0, Options, Parent) ->
     erlang:put(io_priority, {db_compact, DbName}),
     couch_log:debug("Compaction process spawned for db \"~s\"", [DbName]),
+
+    MaxGen = couch_bt_engine_header:max_generation(Header),
+    SrcGen = erlang:min(SrcGen0, MaxGen),
 
     couch_db_engine:trigger_on_compact(DbName),
 
@@ -98,6 +101,8 @@ open_compaction_files(DbName, SrcGen, OldSt, Options) ->
     {ok, DataFd, DataHdr} = open_compaction_file(DataFile),
     {ok, MetaFd, MetaHdr} = open_compaction_file(MetaFile),
     DataHdrIsDbHdr = couch_bt_engine_header:is_header(DataHdr),
+    GenFds = couch_bt_engine:open_additional_generation_file(OldSt, SrcGen, Options),
+    Fds = [DataFd | GenFds],
     CompSt =
         case {DataHdr, MetaHdr} of
             {#comp_header{} = A, #comp_header{} = A} ->
@@ -105,7 +110,7 @@ open_compaction_files(DbName, SrcGen, OldSt, Options) ->
                 % before trying to swap out with the original db
                 DbHeader = A#comp_header.db_header,
                 St0 = couch_bt_engine:init_state(
-                    DataFile, [DataFd], DbHeader, Options
+                    DataFile, Fds, DbHeader, Options
                 ),
                 St1 = bind_emsort(St0, MetaFd, A#comp_header.meta_st),
                 #comp_st{
@@ -123,7 +128,7 @@ open_compaction_files(DbName, SrcGen, OldSt, Options) ->
                 Header = couch_bt_engine_header:from(SrcHdr),
                 ok = reset_compaction_file(MetaFd, Header),
                 St0 = couch_bt_engine:init_state(
-                    DataFile, [DataFd], DataHdr, Options
+                    DataFile, Fds, DataHdr, Options
                 ),
                 St1 = bind_emsort(St0, MetaFd, nil),
                 #comp_st{
@@ -139,7 +144,6 @@ open_compaction_files(DbName, SrcGen, OldSt, Options) ->
                 Header = couch_bt_engine_header:from(SrcHdr),
                 ok = reset_compaction_file(DataFd, Header),
                 ok = reset_compaction_file(MetaFd, Header),
-                Fds = [DataFd | OldSt#st.gen_fds],
                 St0 = couch_bt_engine:init_state(DataFile, Fds, Header, Options),
                 St1 = bind_emsort(St0, MetaFd, nil),
                 #comp_st{
@@ -396,16 +400,23 @@ copy_compact(#comp_st{} = CompSt) ->
         new_st = NewSt6
     }.
 
-increment_generation(#st{gen_fds = Fds}, Gen) ->
-    if
-        Gen < length(Fds) -> Gen + 1;
-        true -> length(Fds)
+generation_and_pointer({Gen, Ptr}) ->
+    {Gen, Ptr};
+generation_and_pointer(Ptr) ->
+    {0, Ptr}.
+
+increment_generation(#st{header = Header}, Gen) ->
+    MaxGen = couch_bt_engine_header:max_generation(Header),
+    case Gen of
+        MaxGen -> {Gen + 1, Gen};
+        G -> {G + 1, G + 1}
     end.
 
-upgrade_leaf_ptr({Gen, Ptr}) ->
-    {Gen, Ptr};
-upgrade_leaf_ptr(Ptr) when is_integer(Ptr) ->
-    {0, Ptr}.
+pick_target_generation(SrcGen, DstGen, DataGen) ->
+    case DataGen of
+        SrcGen -> DstGen;
+        _ -> {DataGen, DataGen}
+    end.
 
 copy_docs(St, SrcGen, #st{} = NewSt, MixedInfos, Retry) ->
     DocInfoIds = [Id || #doc_info{id = Id} <- MixedInfos],
@@ -423,7 +434,7 @@ copy_docs(St, SrcGen, #st{} = NewSt, MixedInfos, Retry) ->
             {NewRevTree, FinalAcc} = couch_key_tree:mapfold(
                 fun
                     ({RevPos, RevId}, #leaf{ptr = LeafPtr} = Leaf, leaf, SizesAcc) ->
-                        {DocGen, _} = upgrade_leaf_ptr(LeafPtr),
+                        {DocGen, _} = generation_and_pointer(LeafPtr),
                         DstGen = increment_generation(St, SrcGen),
                         {Body, AttsChanged, AttInfos} = copy_doc_attachments(
                             St, NewSt, LeafPtr, SrcGen, DstGen
@@ -452,11 +463,7 @@ copy_docs(St, SrcGen, #st{} = NewSt, MixedInfos, Retry) ->
                                         atts = AttInfos
                                     },
                                     Doc1 = couch_bt_engine:serialize_doc(NewSt, Doc0),
-                                    NewGen =
-                                        case DocGen of
-                                            SrcGen -> DstGen;
-                                            _ -> DocGen
-                                        end,
+                                    NewGen = pick_target_generation(SrcGen, DstGen, DocGen),
                                     {ok, Doc2, NewActiveSize} = couch_bt_engine:write_doc_body(
                                         NewSt, Doc1, NewGen
                                     ),
@@ -546,7 +553,7 @@ copy_docs(St, SrcGen, #st{} = NewSt, MixedInfos, Retry) ->
     NewSt#st{id_tree = IdEms, seq_tree = SeqTree}.
 
 copy_doc_attachments(#st{} = SrcSt, DstSt, LeafPtr, SrcGen, DstGen) ->
-    {DocGen, SrcSp} = upgrade_leaf_ptr(LeafPtr),
+    {DocGen, SrcSp} = generation_and_pointer(LeafPtr),
     Fd = couch_bt_engine:get_fd(SrcSt, DocGen),
     {ok, {BodyData, BinInfos0}} = couch_file:pread_term(Fd, SrcSp),
     BinInfos =
@@ -576,16 +583,8 @@ copy_doc_attachments(#st{} = SrcSt, DstSt, LeafPtr, SrcGen, DstGen) ->
             ) when AttGen =/= SrcGen ->
                 {false, BinInfo};
             ({Name, Type, BinSp, AttLen, DiskLen, RevPos, ExpectedMd5, Enc1}) ->
-                AttGen =
-                    case BinSp of
-                        {AttG, Sp} -> AttG;
-                        _ -> 0
-                    end,
-                NewGen =
-                    case AttGen of
-                        SrcGen -> DstGen;
-                        _ -> AttGen
-                    end,
+                {AttGen, _} = generation_and_pointer(BinSp),
+                NewGen = pick_target_generation(SrcGen, DstGen, AttGen),
                 {ok, SrcStream} = couch_bt_engine:open_read_stream(SrcSt, BinSp),
                 {ok, DstStream} = couch_bt_engine:open_write_stream(DstSt, NewGen, []),
                 ok = couch_stream:copy(SrcStream, DstStream),

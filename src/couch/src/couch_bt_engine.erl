@@ -79,6 +79,7 @@
     fold_purge_infos/5,
     count_changes_since/2,
 
+    open_additional_generation_file/3,
     start_compaction/5,
     finish_compaction/4
 ]).
@@ -446,13 +447,13 @@ get_fd(#st{gen_fds = GenFds}, Gen) ->
 
 write_doc_body(St, #doc{} = Doc) ->
     % New doc bodies start with generation 0
-    write_doc_body(St, Doc, 0).
+    write_doc_body(St, Doc, {0, 0}).
 
-write_doc_body(St, #doc{} = Doc, Gen) ->
-    Fd = get_fd(St, Gen),
+write_doc_body(St, #doc{} = Doc, {FdGen, PtrGen}) ->
+    Fd = get_fd(St, FdGen),
     {ok, Ptr, Written} = couch_file:append_raw_chunk(Fd, Doc#doc.body),
     GenPtr =
-        case Gen of
+        case PtrGen of
             0 -> Ptr;
             G -> {G, Ptr}
         end,
@@ -599,11 +600,11 @@ commit_data(St) ->
     end.
 
 open_write_stream(#st{} = St, Options) ->
-    open_write_stream(St, 0, Options).
+    open_write_stream(St, {0, 0}, Options).
 
-open_write_stream(#st{} = St, Gen, Options) ->
-    Fd = get_fd(St, Gen),
-    couch_stream:open({couch_bt_engine_stream, {Fd, Gen, []}}, Options).
+open_write_stream(#st{} = St, {FdGen, PtrGen}, Options) ->
+    Fd = get_fd(St, FdGen),
+    couch_stream:open({couch_bt_engine_stream, {Fd, PtrGen, []}}, Options).
 
 open_read_stream(#st{} = St, {Gen, StreamSt}) ->
     Fd = get_fd(St, Gen),
@@ -895,12 +896,15 @@ open_db_file(FilePath, Options) ->
 
 generation_file_path(FilePath, 0) ->
     FilePath;
-generation_file_path(FilePath, Generation) ->
-    Gen = integer_to_list(Generation),
-    string:replace(FilePath, ".couch", "." ++ Gen ++ ".couch", trailing).
+generation_file_path(FilePath, Gen) ->
+    G = integer_to_list(Gen),
+    string:replace(FilePath, ".couch", "." ++ G ++ ".couch", trailing).
 
-open_generation_file(FilePath, Generation, Options) ->
-    GenFilePath = generation_file_path(FilePath, Generation),
+open_generation_file(FilePath, Gen, Options) ->
+    open_generation_file(FilePath, Gen, "", Options).
+
+open_generation_file(FilePath, Gen, Suffix, Options) ->
+    GenFilePath = generation_file_path(FilePath, Gen) ++ Suffix,
     case catch open_db_file(GenFilePath, [nologifmissing | Options]) of
         {ok, Db} ->
             Db;
@@ -913,8 +917,8 @@ open_generation_files(_FilePath, 0, _Options) ->
     [];
 open_generation_files(FilePath, Generations, Options) ->
     lists:map(
-        fun(Generation) ->
-            open_generation_file(FilePath, Generation, Options)
+        fun(Gen) ->
+            open_generation_file(FilePath, Gen, Options)
         end,
         lists:seq(1, Generations)
     ).
@@ -923,6 +927,21 @@ maybe_open_generation_files(FilePath, Generations, Options) ->
     case lists:member(compacting, Options) of
         true -> [];
         false -> open_generation_files(FilePath, Generations, Options)
+    end.
+
+open_additional_generation_file(#st{} = St, Gen, Options) ->
+    #st{
+        filepath = FilePath,
+        header = Header,
+        gen_fds = GenFds
+    } = St,
+    MaxGen = couch_bt_engine_header:max_generation(Header),
+    case Gen of
+        MaxGen ->
+            Fd = open_generation_file(FilePath, Gen, ".compact.maxgen", Options),
+            GenFds ++ [Fd];
+        _ ->
+            GenFds
     end.
 
 replace_generation_file(FilePath, Fds, Gen) ->
@@ -1279,7 +1298,8 @@ fold_docs_reduce_to_count(Reds) ->
 finish_compaction_int(#st{} = OldSt, #st{} = NewSt1, Generation) ->
     #st{
         filepath = FilePath,
-        local_tree = OldLocal
+        local_tree = OldLocal,
+        gen_fds = OldGenFds
     } = OldSt,
     #st{
         filepath = CompactDataPath,
@@ -1315,10 +1335,6 @@ finish_compaction_int(#st{} = OldSt, #st{} = NewSt1, Generation) ->
     % Move our compacted file into its final location
     ok = file:rename(FilePath ++ ".compact", FilePath),
 
-    % Delete the old meta compaction file after promoting
-    % the compaction file.
-    couch_file:delete(RootDir, FilePath ++ ".compact.meta"),
-
     % Assuming that the compactor is the only process that writes to generation
     % files, and there is only one compaction per shard running at any time,
     % then the compacted generation file G will have had all its data moved to
@@ -1326,14 +1342,25 @@ finish_compaction_int(#st{} = OldSt, #st{} = NewSt1, Generation) ->
     % contains no data referenced by the root .couch file, and can be deleted
     % and a fresh file opened in its place.
 
-    GenFds =
-        case generation_file_path(FilePath, Generation) of
-            FilePath ->
-                OldSt#st.gen_fds;
-            GenFilePath ->
-                couch_file:delete(RootDir, GenFilePath),
-                replace_generation_file(FilePath, OldSt#st.gen_fds, Generation)
+    NewGenFds =
+        case Generation of
+            0 ->
+                OldGenFds;
+            Gen ->
+                GenFilePath = generation_file_path(FilePath, Gen),
+                if
+                    Gen =:= length(OldGenFds) ->
+                        MaxGenFilePath = generation_file_path(FilePath, Gen) ++ ".compact.maxgen",
+                        ok = file:rename(MaxGenFilePath, GenFilePath);
+                    true ->
+                        couch_file:delete(RootDir, GenFilePath)
+                end,
+                replace_generation_file(FilePath, OldGenFds, Gen)
         end,
+
+    % Delete the old meta compaction file after promoting
+    % the compaction file.
+    couch_file:delete(RootDir, FilePath ++ ".compact.meta"),
 
     % We're finished with our old state
     decref(OldSt),
@@ -1342,7 +1369,7 @@ finish_compaction_int(#st{} = OldSt, #st{} = NewSt1, Generation) ->
     {ok,
         NewSt2#st{
             filepath = FilePath,
-            gen_fds = GenFds
+            gen_fds = NewGenFds
         },
         undefined}.
 

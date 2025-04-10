@@ -165,6 +165,45 @@ test_retention_in_gen_0 () {
   cdb '/asd/doc-2/att-2' -i
 }
 
+test_compact_final_generation () {
+  create-doc 'the-doc' '{ "basic": "DOC BODY" }'
+
+  compact 0
+  compact 1
+  compact 2
+
+  check-files 'DOC BODY'            0 0 0 1
+
+  add-att 'the-doc' 'the-att' 'VERY OBVIOUS ATTACHMENT DATA'
+
+  check-files 'DOC BODY'            1 0 0 1
+  check-files 'OBVIOUS ATTACHMENT'  1 0 0 0
+
+  compact 0
+
+  check-files 'DOC BODY'            0 1 0 1
+  check-files 'OBVIOUS ATTACHMENT'  0 1 0 0
+
+  compact 1
+
+  check-files 'DOC BODY'            0 0 1 1
+  check-files 'OBVIOUS ATTACHMENT'  0 0 1 0
+
+  compact 2
+
+  check-files 'DOC BODY'            0 0 0 2
+  check-files 'OBVIOUS ATTACHMENT'  0 0 0 1
+
+  cdb '/asd/the-doc'
+
+  compact 3
+
+  check-files 'DOC BODY'            0 0 0 1
+  check-files 'OBVIOUS ATTACHMENT'  0 0 0 1
+
+  cdb '/asd/the-doc'
+}
+
 ########################################################################
 # Support functions
 
