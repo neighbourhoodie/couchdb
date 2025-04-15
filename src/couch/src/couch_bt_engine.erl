@@ -174,7 +174,6 @@ init(FilePath, Options) ->
                         Header0
                 end
         end,
-
     OpenGen = couch_bt_engine_header:max_generation(Header),
     GenFds = maybe_open_generation_files(FilePath, OpenGen, Options),
     {ok, init_state(FilePath, [Fd | GenFds], Header, Options)}.
@@ -878,12 +877,13 @@ open_db_file(FilePath, Options) ->
         {ok, Fd} ->
             {ok, Fd};
         {error, enoent} ->
-            % Couldn't find file. is there a compact version? This ca
+            % Couldn't find file. is there a compact version? This can
             % happen (rarely) if we crashed during the file switch.
             case couch_file:open(FilePath ++ ".compact", [nologifmissing]) of
                 {ok, Fd} ->
                     Fmt = "Recovering from compaction file: ~s~s",
                     couch_log:info(Fmt, [FilePath, ".compact"]),
+                    cleanup_any_compacted_generation(FilePath),
                     ok = file:rename(FilePath ++ ".compact", FilePath),
                     ok = couch_file:sync(Fd),
                     {ok, Fd};
@@ -905,10 +905,10 @@ open_generation_file(FilePath, Gen, Options) ->
 
 open_generation_file(FilePath, Gen, Suffix, Options) ->
     GenFilePath = generation_file_path(FilePath, Gen) ++ Suffix,
-    case catch open_db_file(GenFilePath, [nologifmissing | Options]) of
+    case couch_file:open(GenFilePath, [nologifmissing | Options]) of
         {ok, Db} ->
             Db;
-        {not_found, no_db_file} ->
+        {error, enoent} ->
             {ok, Fd} = couch_file:open(GenFilePath, [create]),
             Fd
     end.
@@ -944,14 +944,14 @@ open_additional_generation_file(#st{} = St, Gen, Options) ->
             GenFds
     end.
 
-replace_generation_file(FilePath, Fds, Gen) ->
-    replace_generation_file(FilePath, Gen, Fds, Gen).
+reopen_generation_file(FilePath, Fds, Gen) ->
+    reopen_generation_file(FilePath, Gen, Fds, Gen).
 
-replace_generation_file(FilePath, Gen, [_ | Fds], 1) ->
+reopen_generation_file(FilePath, Gen, [_ | Fds], 1) ->
     Fd = open_generation_file(FilePath, Gen, []),
     [Fd | Fds];
-replace_generation_file(FilePath, Gen, [Fd | Fds], G) ->
-    [Fd | replace_generation_file(FilePath, Gen, Fds, G - 1)].
+reopen_generation_file(FilePath, Gen, [Fd | Fds], G) ->
+    [Fd | reopen_generation_file(FilePath, Gen, Fds, G - 1)].
 
 init_state(FilePath, Fds, Header0, Options) ->
     [Fd | GenFds] = Fds,
@@ -1323,6 +1323,18 @@ finish_compaction_int(#st{} = OldSt, #st{} = NewSt1, Generation) ->
         local_tree = NewLocal2
     }),
 
+    % CRASH SAFETY: this function must do these operations in this order:
+    %
+    % - Rename db.couch.compact.data to db.couch.compact
+    % - Delete the original db.couch
+    % - Deal with deleting/renaming generation files
+    % - Rename db.couch.compact to db.couch
+    % - Delete db.couch.compact.meta
+    %
+    % This order is also followed when recovering from a crash that leaves
+    % compaction files in place. Deviating from this order may create an
+    % ambiguous state that makes recovery from crashes harder.
+
     % Rename our *.compact.data file to *.compact so that if we
     % die between deleting the old file and renaming *.compact
     % we can recover correctly.
@@ -1332,9 +1344,6 @@ finish_compaction_int(#st{} = OldSt, #st{} = NewSt1, Generation) ->
     RootDir = config:get("couchdb", "database_dir", "."),
     couch_file:delete(RootDir, FilePath),
 
-    % Move our compacted file into its final location
-    ok = file:rename(FilePath ++ ".compact", FilePath),
-
     % Assuming that the compactor is the only process that writes to generation
     % files, and there is only one compaction per shard running at any time,
     % then the compacted generation file G will have had all its data moved to
@@ -1342,21 +1351,23 @@ finish_compaction_int(#st{} = OldSt, #st{} = NewSt1, Generation) ->
     % contains no data referenced by the root .couch file, and can be deleted
     % and a fresh file opened in its place.
 
+    MaxGen = couch_bt_engine_header:max_generation(Header),
+
     NewGenFds =
         case Generation of
             0 ->
                 OldGenFds;
+            MaxGen ->
+                cleanup_compacted_max_generation(FilePath, MaxGen),
+                reopen_generation_file(FilePath, OldGenFds, MaxGen);
             Gen ->
                 GenFilePath = generation_file_path(FilePath, Gen),
-                if
-                    Gen =:= length(OldGenFds) ->
-                        MaxGenFilePath = generation_file_path(FilePath, Gen) ++ ".compact.maxgen",
-                        ok = file:rename(MaxGenFilePath, GenFilePath);
-                    true ->
-                        couch_file:delete(RootDir, GenFilePath)
-                end,
-                replace_generation_file(FilePath, OldGenFds, Gen)
+                couch_file:delete(RootDir, GenFilePath),
+                reopen_generation_file(FilePath, OldGenFds, Gen)
         end,
+
+    % Move our compacted file into its final location
+    ok = file:rename(FilePath ++ ".compact", FilePath),
 
     % Delete the old meta compaction file after promoting
     % the compaction file.
@@ -1372,6 +1383,38 @@ finish_compaction_int(#st{} = OldSt, #st{} = NewSt1, Generation) ->
             gen_fds = NewGenFds
         },
         undefined}.
+
+cleanup_any_compacted_generation(FilePath) ->
+    Dir = filename:dirname(FilePath),
+    {ok, Filenames} = file:list_dir(Dir),
+    lists:foreach(
+        fun(Filename) ->
+            CompactPath = filename:join(Dir, Filename),
+            [NewPath | _] = string:replace(CompactPath, ".compact.maxgen", "", trailing),
+            case NewPath of
+                CompactPath ->
+                    ok;
+                GenPath ->
+                    move_compacted_generation_file(GenPath, CompactPath)
+            end
+        end,
+        Filenames
+    ).
+
+cleanup_compacted_max_generation(FilePath, MaxGen) ->
+    GenPath = generation_file_path(FilePath, MaxGen),
+    CompactPath = GenPath ++ ".compact.maxgen",
+    move_compacted_generation_file(GenPath, CompactPath).
+
+move_compacted_generation_file(GenPath, CompactPath) ->
+    case is_file(CompactPath) of
+        true ->
+            RootDir = config:get("couchdb", "database_dir", "."),
+            couch_file:delete(RootDir, GenPath),
+            ok = file:rename(CompactPath, GenPath);
+        false ->
+            ok
+    end.
 
 is_file(Path) ->
     case file:read_file_info(Path, [raw]) of
