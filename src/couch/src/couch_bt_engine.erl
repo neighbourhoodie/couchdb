@@ -936,9 +936,11 @@ open_additional_generation_file(#st{} = St, Gen, Options) ->
         gen_fds = GenFds
     } = St,
     MaxGen = couch_bt_engine_header:max_generation(Header),
-    case Gen of
-        MaxGen ->
-            Fd = open_generation_file(FilePath, Gen, ".compact.maxgen", Options),
+    case {MaxGen, Gen} of
+        {0, _} ->
+            GenFds;
+        {M, M} ->
+            Fd = open_generation_file(FilePath, M, ".compact.maxgen", Options),
             GenFds ++ [Fd];
         _ ->
             GenFds

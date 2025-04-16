@@ -127,6 +127,42 @@ test_doc_with_att_compact_0_compact_1_add_att () {
   check-files 'EXTRA READ'          0 0 0 1
 }
 
+test_compact_max_gen_0 () {
+  create-db 0
+
+  create-doc 'the-doc' '{ "basic": "DOC BODY" }'
+  add-att 'the-doc' 'the-att' $'VERY OBVIOUS ATTACHMENT DATA\n'
+
+  check-files 'DOC BODY'            2
+  check-files 'OBVIOUS ATTACHMENT'  1
+
+  compact 0
+
+  check-files 'DOC BODY'            1
+  check-files 'OBVIOUS ATTACHMENT'  1
+
+  cdb '/asd/the-doc'
+  cdb '/asd/the-doc/the-att'
+}
+
+test_compact_max_gen_1 () {
+  create-db 1
+
+  create-doc 'the-doc' '{ "basic": "DOC BODY" }'
+  add-att 'the-doc' 'the-att' $'VERY OBVIOUS ATTACHMENT DATA\n'
+
+  check-files 'DOC BODY'            2 0
+  check-files 'OBVIOUS ATTACHMENT'  1 0
+
+  compact 0
+
+  check-files 'DOC BODY'            0 1
+  check-files 'OBVIOUS ATTACHMENT'  0 1
+
+  cdb '/asd/the-doc'
+  cdb '/asd/the-doc/the-att'
+}
+
 test_retention_in_gen_0 () {
   create-doc 'doc-1' '{ "the": ["first", "doc"] }'
   add-att 'doc-1' 'att-1' 'whatever'
@@ -225,9 +261,10 @@ cdb-req () {
 }
 
 create-db () {
+  local gen="${1:-3}"
   cdb "/$db" -X DELETE
   rm -f $DATA/$db*
-  cdb "/$db?q=1&gen=3" -X PUT
+  cdb "/$db?q=1&gen=$gen" -X PUT
   suffix="$(cdb "/$db" | jq -r '.instance_start_time')"
 }
 

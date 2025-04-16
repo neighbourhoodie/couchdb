@@ -407,9 +407,10 @@ generation_and_pointer(Ptr) ->
 
 increment_generation(#st{header = Header}, Gen) ->
     MaxGen = couch_bt_engine_header:max_generation(Header),
-    case Gen of
-        MaxGen -> {Gen + 1, Gen};
-        G -> {G + 1, G + 1}
+    case {MaxGen, Gen} of
+        {0, _} -> {0, 0};
+        {M, M} -> {M + 1, M};
+        {_, G} -> {G + 1, G + 1}
     end.
 
 pick_target_generation(SrcGen, DstGen, DataGen) ->
