@@ -124,7 +124,11 @@ merge_results(Info) ->
 
 merge_sizes(ByShard) ->
     ByGen = fill_transpose({[]}, ByShard),
-    [{merge_object(S)} || S <- ByGen].
+    Merged = [{merge_object(S)} || S <- ByGen],
+    case Merged of
+        [S] -> S;
+        S -> S
+    end.
 
 fill_transpose(Filler, Lists) ->
     fill_transpose(Filler, Lists, []).

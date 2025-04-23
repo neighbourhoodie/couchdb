@@ -257,7 +257,7 @@ get_revs_limit(#st{header = Header}) ->
 
 get_size_info(#st{} = St) ->
     {ok, DbReduction} = couch_btree:full_reduce(St#st.id_tree),
-    SizeInfos = upgrade_sizes(element(3, DbReduction)),
+    SizeInfos = upgrade_sizes_to_list(element(3, DbReduction)),
     lists:zipwith(
         fun(Gen, SI) ->
             Fd = get_fd(St, Gen),
@@ -720,7 +720,7 @@ id_tree_join(Id, {HighSeq, Deleted, Sizes, DiskTree}) ->
         id = Id,
         update_seq = HighSeq,
         deleted = ?i2b(Deleted),
-        sizes = upgrade_sizes(Sizes),
+        sizes = couch_db_updater:upgrade_sizes(Sizes),
         rev_tree = rev_tree(DiskTree)
     }.
 
@@ -1205,14 +1205,15 @@ reduce_sizes(S, []) ->
 reduce_sizes([S1 | R1], [S2 | R2]) ->
     [reduce_sizes(S1, S2) | reduce_sizes(R1, R2)];
 reduce_sizes(S1, S2) ->
-    US1 = upgrade_sizes(S1),
-    US2 = upgrade_sizes(S2),
+    US1 = upgrade_sizes_to_list(S1),
+    US2 = upgrade_sizes_to_list(S2),
     reduce_sizes(US1, US2).
 
-upgrade_sizes(S) when is_list(S) ->
-    lists:map(fun couch_db_updater:upgrade_sizes/1, S);
-upgrade_sizes(S) ->
-    upgrade_sizes([S]).
+upgrade_sizes_to_list(Sizes) ->
+    case couch_db_updater:upgrade_sizes(Sizes) of
+        S when is_list(S) -> S;
+        S -> [S]
+    end.
 
 active_size(#st{} = St, #size_info{} = SI) ->
     Trees = [

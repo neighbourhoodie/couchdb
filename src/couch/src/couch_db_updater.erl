@@ -13,7 +13,7 @@
 -module(couch_db_updater).
 -behaviour(gen_server).
 
--export([add_sizes/3, upgrade_sizes/1]).
+-export([add_sizes/3, map_sizes/2, upgrade_sizes/1]).
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2]).
 -export([generation_pointer/1, canonical_pointer/1]).
 
@@ -380,7 +380,7 @@ flush_trees(
         Unflushed
     ),
 
-    GenSizes = lists:map(
+    GenSizes = map_sizes(
         fun({FinalAS, FinalES, FinalAtts}) ->
             TotalAttSize = lists:foldl(fun({_, S}, A) -> S + A end, 0, FinalAtts),
             #size_info{
@@ -438,7 +438,10 @@ generation_pointer({Gen, Ptr}) ->
 
 add_sizes(leaf, #leaf{ptr = Ptr} = Leaf, Acc) ->
     {Gen, _} = generation_pointer(Ptr),
-    add_sizes_int(Leaf, Gen, Acc);
+    case add_sizes_int(Leaf, Gen, Acc) of
+        [A] -> A;
+        A -> A
+    end;
 add_sizes(_, #leaf{}, Acc) ->
     % For intermediate nodes external and active contribution is 0
     Acc.
@@ -464,10 +467,15 @@ add_sizes_leaf(#leaf{sizes = Sizes, atts = AttSizes}, Acc) ->
     NewAttsAcc = lists:umerge(AttSizes, AttsAcc),
     {NewASAcc, NewESAcc, NewAttsAcc}.
 
-% TODO: this causes massive CPU load for some reason; only some uses of
-% upgrade_sizes are currently list-aware
-% upgrade_sizes(S) when is_list(S) ->
-%     lists:map(fun upgrade_sizes/1, S);
+map_sizes(Fun, Sizes) when is_list(Sizes) ->
+    lists:map(Fun, Sizes);
+map_sizes(Fun, Sizes) ->
+    Fun(Sizes).
+
+upgrade_sizes([S]) ->
+    upgrade_sizes(S);
+upgrade_sizes(S) when is_list(S) ->
+    lists:map(fun upgrade_sizes/1, S);
 upgrade_sizes(#size_info{} = SI) ->
     SI;
 upgrade_sizes({D, E}) ->
