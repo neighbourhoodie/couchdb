@@ -396,11 +396,7 @@ open_local_docs(#st{} = St, DocIds) ->
     ).
 
 read_doc_body(#st{} = St, #doc{} = Doc) ->
-    {Gen, Ptr} =
-        case Doc#doc.body of
-            {G, P} -> {G, P};
-            P -> {0, P}
-        end,
+    {Gen, Ptr} = couch_db_updater:generation_pointer(Doc#doc.body),
     Fd = get_fd(St, Gen),
     {ok, {Body, Atts}} = couch_file:pread_term(Fd, Ptr),
     Doc#doc{
@@ -605,11 +601,10 @@ open_write_stream(#st{} = St, {FdGen, PtrGen}, Options) ->
     Fd = get_fd(St, FdGen),
     couch_stream:open({couch_bt_engine_stream, {Fd, PtrGen, []}}, Options).
 
-open_read_stream(#st{} = St, {Gen, StreamSt}) ->
+open_read_stream(#st{} = St, StreamSt0) ->
+    {Gen, StreamSt} = couch_db_updater:generation_pointer(StreamSt0),
     Fd = get_fd(St, Gen),
-    {ok, {couch_bt_engine_stream, {Fd, Gen, StreamSt}}};
-open_read_stream(#st{} = St, StreamSt) when is_list(StreamSt) ->
-    open_read_stream(St, {0, StreamSt}).
+    {ok, {couch_bt_engine_stream, {Fd, Gen, StreamSt}}}.
 
 is_active_stream(#st{} = St, {couch_bt_engine_stream, {Fd, _, _}}) ->
     Fds = [St#st.fd | St#st.gen_fds],
@@ -1175,15 +1170,10 @@ disk_tree(RevTree) ->
                     sizes = Sizes,
                     atts = Atts
                 } = Leaf,
-                {?b2i(Del), canonical_pointer(Ptr), Seq, split_sizes(Sizes), Atts}
+                {?b2i(Del), couch_db_updater:canonical_pointer(Ptr), Seq, split_sizes(Sizes), Atts}
         end,
         RevTree
     ).
-
-canonical_pointer({0, Ptr}) ->
-    Ptr;
-canonical_pointer(Ptr) ->
-    Ptr.
 
 split_sizes(#size_info{} = SI) ->
     {SI#size_info.active, SI#size_info.external};

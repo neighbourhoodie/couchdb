@@ -400,11 +400,6 @@ copy_compact(#comp_st{} = CompSt) ->
         new_st = NewSt6
     }.
 
-generation_and_pointer({Gen, Ptr}) ->
-    {Gen, Ptr};
-generation_and_pointer(Ptr) ->
-    {0, Ptr}.
-
 increment_generation(#st{header = Header}, Gen) ->
     MaxGen = couch_bt_engine_header:max_generation(Header),
     case {MaxGen, Gen} of
@@ -435,7 +430,7 @@ copy_docs(St, SrcGen, #st{} = NewSt, MixedInfos, Retry) ->
             {NewRevTree, FinalAcc} = couch_key_tree:mapfold(
                 fun
                     ({RevPos, RevId}, #leaf{ptr = LeafPtr} = Leaf, leaf, SizesAcc) ->
-                        {DocGen, _} = generation_and_pointer(LeafPtr),
+                        {DocGen, _} = couch_db_updater:generation_pointer(LeafPtr),
                         DstGen = increment_generation(St, SrcGen),
                         {Body, AttsChanged, AttInfos} = copy_doc_attachments(
                             St, NewSt, LeafPtr, SrcGen, DstGen
@@ -554,7 +549,7 @@ copy_docs(St, SrcGen, #st{} = NewSt, MixedInfos, Retry) ->
     NewSt#st{id_tree = IdEms, seq_tree = SeqTree}.
 
 copy_doc_attachments(#st{} = SrcSt, DstSt, LeafPtr, SrcGen, DstGen) ->
-    {DocGen, SrcSp} = generation_and_pointer(LeafPtr),
+    {DocGen, SrcSp} = couch_db_updater:generation_pointer(LeafPtr),
     Fd = couch_bt_engine:get_fd(SrcSt, DocGen),
     {ok, {BodyData, BinInfos0}} = couch_file:pread_term(Fd, SrcSp),
     BinInfos =
@@ -584,7 +579,7 @@ copy_doc_attachments(#st{} = SrcSt, DstSt, LeafPtr, SrcGen, DstGen) ->
             ) when AttGen =/= SrcGen ->
                 {false, BinInfo};
             ({Name, Type, BinSp, AttLen, DiskLen, RevPos, ExpectedMd5, Enc1}) ->
-                {AttGen, _} = generation_and_pointer(BinSp),
+                {AttGen, _} = couch_db_updater:generation_pointer(BinSp),
                 NewGen = pick_target_generation(SrcGen, DstGen, AttGen),
                 {ok, SrcStream} = couch_bt_engine:open_read_stream(SrcSt, BinSp),
                 {ok, DstStream} = couch_bt_engine:open_write_stream(DstSt, NewGen, []),
