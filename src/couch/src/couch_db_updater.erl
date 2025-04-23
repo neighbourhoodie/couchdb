@@ -436,21 +436,23 @@ generation_pointer(Ptr) when is_list(Ptr) ->
 generation_pointer({Gen, Ptr}) ->
     {Gen, Ptr}.
 
-add_sizes(Type, #leaf{ptr = {_Gen, _Ptr}} = Leaf, Acc) ->
-    add_sizes_int(Type, Leaf, Acc);
-add_sizes(Type, #leaf{ptr = Ptr} = Leaf, Acc) ->
-    add_sizes_int(Type, Leaf#leaf{ptr = {0, Ptr}}, Acc).
+add_sizes(leaf, #leaf{ptr = Ptr} = Leaf, Acc) ->
+    {Gen, _} = generation_pointer(Ptr),
+    add_sizes_int(Leaf, Gen, Acc);
+add_sizes(_, #leaf{}, Acc) ->
+    % For intermediate nodes external and active contribution is 0
+    Acc.
 
-add_sizes_int(Type, Leaf, []) ->
-    add_sizes_int(Type, Leaf, [{0, 0, []}]);
-add_sizes_int(Type, #leaf{ptr = {0, _}} = Leaf, [Acc | Rest]) ->
-    [add_sizes_single(Type, Leaf, Acc) | Rest];
-add_sizes_int(Type, #leaf{ptr = {Gen, Ptr}} = Leaf, [Acc | Rest]) ->
-    [Acc | add_sizes_int(Type, Leaf#leaf{ptr = {Gen - 1, Ptr}}, Rest)];
-add_sizes_int(Type, Leaf, Acc) ->
-    add_sizes_int(Type, Leaf, [Acc]).
+add_sizes_int(Leaf, Gen, []) ->
+    add_sizes_int(Leaf, Gen, [{0, 0, []}]);
+add_sizes_int(Leaf, 0, [Acc | Rest]) ->
+    [add_sizes_leaf(Leaf, Acc) | Rest];
+add_sizes_int(Leaf, Gen, [Acc | Rest]) ->
+    [Acc | add_sizes_int(Leaf, Gen - 1, Rest)];
+add_sizes_int(Leaf, Gen, Acc) ->
+    add_sizes_int(Leaf, Gen, [Acc]).
 
-add_sizes_single(leaf, #leaf{sizes = Sizes, atts = AttSizes}, Acc) ->
+add_sizes_leaf(#leaf{sizes = Sizes, atts = AttSizes}, Acc) ->
     % Maybe upgrade from disk_size only
     #size_info{
         active = ActiveSize,
@@ -460,10 +462,7 @@ add_sizes_single(leaf, #leaf{sizes = Sizes, atts = AttSizes}, Acc) ->
     NewASAcc = ActiveSize + ASAcc,
     NewESAcc = ExternalSize + ESAcc,
     NewAttsAcc = lists:umerge(AttSizes, AttsAcc),
-    {NewASAcc, NewESAcc, NewAttsAcc};
-add_sizes_single(_, #leaf{}, Acc) ->
-    % For intermediate nodes external and active contribution is 0
-    Acc.
+    {NewASAcc, NewESAcc, NewAttsAcc}.
 
 % TODO: this causes massive CPU load for some reason; only some uses of
 % upgrade_sizes are currently list-aware

@@ -257,12 +257,16 @@ get_revs_limit(#st{header = Header}) ->
 
 get_size_info(#st{} = St) ->
     {ok, DbReduction} = couch_btree:full_reduce(St#st.id_tree),
-    SizeInfo = upgrade_sizes(element(3, DbReduction)),
+    SizeInfos = upgrade_sizes(element(3, DbReduction)),
     lists:zipwith(
         fun(Gen, SI) ->
-            Fd = get_fd(St, Gen - 1),
+            Fd = get_fd(St, Gen),
             {ok, FileSize} = couch_file:bytes(Fd),
-            ActiveSize = active_size(St, SI),
+            ActiveSize =
+                case Gen of
+                    0 -> active_size(St, SI);
+                    _ -> SI#size_info.active
+                end,
             ExternalSize = SI#size_info.external,
             [
                 {active, ActiveSize},
@@ -270,8 +274,8 @@ get_size_info(#st{} = St) ->
                 {file, FileSize}
             ]
         end,
-        lists:seq(1, length(SizeInfo)),
-        upgrade_sizes(SizeInfo)
+        lists:seq(0, length(SizeInfos) - 1),
+        SizeInfos
     ).
 
 partition_size_cb(traverse, Key, {DC, DDC, Sizes}, {Partition, DCAcc, DDCAcc, SizesAcc}) ->

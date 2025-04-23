@@ -240,6 +240,17 @@ test_compact_final_generation () {
   cdb '/asd/the-doc'
 }
 
+check_sizing () {
+  create-doc 'doc-1' '{ "the": ["first", "doc"] }'
+
+  cdb '/asd' | jq '.sizes'
+
+  for n in {0..1} ; do
+    compact "$n"
+    cdb '/asd' | jq '.sizes'
+  done
+}
+
 ########################################################################
 # Support functions
 
