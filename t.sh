@@ -240,6 +240,49 @@ test_compact_final_generation () {
   cdb '/asd/the-doc'
 }
 
+test_copy_doc_on_moving_attachment () {
+  create-doc 'the-doc' '{ "basic": "DOC BODY" }'
+
+  compact 0
+  compact 1
+
+  check-files 'DOC BODY'            0 0 1
+
+  add-att 'the-doc' 'the-att' 'VERY OBVIOUS ATTACHMENT DATA'
+
+  check-files 'DOC BODY'            1 0 1
+  check-files 'OBVIOUS ATTACHMENT'  1 0 0
+
+  compact 0
+
+  check-files 'DOC BODY'            0 1 1
+  check-files 'OBVIOUS ATTACHMENT'  0 1 0
+
+  update-doc 'the-doc' '.basic = "UPDATED BODY"'
+
+  check-files 'DOC BODY'            0 1 1
+  check-files 'OBVIOUS ATTACHMENT'  0 1 0
+  check-files 'UPDATED BODY'        1 0 0
+
+  compact 1
+
+  check-files 'DOC BODY'            0 0 1
+  check-files 'OBVIOUS ATTACHMENT'  0 0 1
+  check-files 'UPDATED BODY'        1 0 0
+
+  compact 0
+
+  check-files 'DOC BODY'            0 0 1
+  check-files 'OBVIOUS ATTACHMENT'  0 0 1
+  check-files 'UPDATED BODY'        0 1 0
+
+  compact 2
+
+  check-files 'DOC BODY'            0 0 0 0
+  check-files 'OBVIOUS ATTACHMENT'  0 0 0 1
+  check-files 'UPDATED BODY'        0 2 0 0
+}
+
 check_sizing () {
   create-doc 'doc-1' '{ "the": ["first", "doc"] }'
 
@@ -313,6 +356,12 @@ compact () {
   local gen="$1"
   cdb "/$db/_compact?gen=$gen" -X POST
   sleep 1
+
+  local compact_files="$(find dev/lib -name '*compact*' | wc -l)"
+
+  if [[ $compact_files -gt 0 ]] ; then
+    echo "[ERROR] compaction files are still present"
+  fi
 }
 
 check-files () {
