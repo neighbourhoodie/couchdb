@@ -132,8 +132,19 @@ delete(RootDir, FilePath, Async) ->
     %% as a recovery.
     delete_compaction_files(RootDir, FilePath, [{context, compaction}]),
 
-    % Delete the actual database file
-    couch_file:delete(RootDir, FilePath, Async).
+    % Delete the actual database files
+    delete_generational_files(RootDir, FilePath, 0, Async).
+
+delete_generational_files(RootDir, FilePath, Gen, Async) ->
+    GenPath = generation_file_path(FilePath, Gen),
+    case couch_file:delete(RootDir, GenPath, Async) of
+        ok ->
+            delete_generational_files(RootDir, FilePath, Gen + 1, Async);
+        {error, enoent} ->
+            ok;
+        Error ->
+            Error
+    end.
 
 delete_compaction_files(RootDir, FilePath, DelOpts) ->
     lists:foreach(
