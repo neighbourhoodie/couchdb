@@ -633,7 +633,7 @@ att(Size) when is_integer(Size), Size >= 1 ->
 
 compact_db(DbName) ->
     {ok, Db} = couch_db:open_int(DbName, []),
-    {ok, _CompactPid} = couch_db:start_compact(Db),
+    {ok, _CompactPid} = couch_db:start_compact(Db, 0),
     wait_compaction(DbName, "database", ?LINE),
     ok = couch_db:close(Db).
 

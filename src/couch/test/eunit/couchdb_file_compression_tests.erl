@@ -168,7 +168,7 @@ refresh_index(DbName) ->
 compact_db(DbName) ->
     DiskSizeBefore = db_disk_size(DbName),
     {ok, Db} = couch_db:open_int(DbName, []),
-    {ok, _CompactPid} = couch_db:start_compact(Db),
+    {ok, _CompactPid} = couch_db:start_compact(Db, 0),
     wait_compaction(DbName, "database", ?LINE),
     ok = couch_db:close(Db),
     DiskSizeAfter = db_disk_size(DbName),
@@ -208,10 +208,20 @@ view_external_size(DbName) ->
     external_size(Info).
 
 active_size(Info) ->
-    couch_util:get_nested_json_value({Info}, [sizes, active]).
+    Size =
+        case couch_util:get_value(sizes, Info) of
+            [{Size} | _] -> Size;
+            {Size} -> Size
+        end,
+    couch_util:get_value(active, Size).
 
 external_size(Info) ->
-    couch_util:get_nested_json_value({Info}, [sizes, external]).
+    Size =
+        case couch_util:get_value(sizes, Info) of
+            [{Size} | _] -> Size;
+            {Size} -> Size
+        end,
+    couch_util:get_value(external, Size).
 
 wait_compaction(DbName, Kind, Line) ->
     WaitFun = fun() ->

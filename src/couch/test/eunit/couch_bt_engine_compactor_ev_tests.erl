@@ -230,7 +230,7 @@ run_static(Event, DbName) ->
     {ok, Reason} = ?EV_MOD:set_crash(Event),
     {ok, Db} = couch_db:open_int(DbName, []),
     Ref = couch_db:monitor(Db),
-    {ok, CPid} = couch_db:start_compact(Db),
+    {ok, CPid} = couch_db:start_compact(Db, 0),
     ContinueFun(CPid),
     receive
         {'DOWN', Ref, _, _, Reason} ->
@@ -249,7 +249,7 @@ run_dynamic(Event, DbName) ->
     {ok, Reason} = ?EV_MOD:set_crash(Event),
     {ok, Db} = couch_db:open_int(DbName, []),
     Ref = couch_db:monitor(Db),
-    {ok, CPid} = couch_db:start_compact(Db),
+    {ok, CPid} = couch_db:start_compact(Db, 0),
     ok = populate_db(Db, 10),
     ContinueFun(CPid),
     receive
@@ -263,7 +263,7 @@ run_successful_compaction(DbName) ->
     ?EV_MOD:clear(),
     {ok, ContinueFun} = ?EV_MOD:set_wait(init),
     {ok, Db} = couch_db:open_int(DbName, []),
-    {ok, CPid} = couch_db:start_compact(Db),
+    {ok, CPid} = couch_db:start_compact(Db, 0),
     Ref = erlang:monitor(process, CPid),
     ContinueFun(CPid),
     receive

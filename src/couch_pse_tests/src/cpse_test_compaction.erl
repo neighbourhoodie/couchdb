@@ -161,7 +161,7 @@ cpse_recompact_updates(Db1) ->
     ),
     {ok, Db2} = cpse_util:apply_batch(Db1, Actions1),
 
-    {ok, Compactor} = couch_db:start_compact(Db2),
+    {ok, Compactor} = couch_db:start_compact(Db2, 0),
     catch erlang:suspend_process(Compactor),
 
     Actions2 = [
@@ -199,7 +199,7 @@ cpse_purge_during_compact(Db1) ->
     ],
     {ok, Db3} = cpse_util:apply_actions(Db2, Actions3),
 
-    {ok, Pid} = couch_db:start_compact(Db3),
+    {ok, Pid} = couch_db:start_compact(Db3, 0),
     catch erlang:suspend_process(Pid),
 
     [BarFDI, BazFDI] = couch_db_engine:open_docs(Db3, [<<"bar">>, <<"baz">>]),
@@ -241,7 +241,7 @@ cpse_multiple_purge_during_compact(Db1) ->
     ],
     {ok, Db3} = cpse_util:apply_actions(Db2, Actions3),
 
-    {ok, Pid} = couch_db:start_compact(Db3),
+    {ok, Pid} = couch_db:start_compact(Db3, 0),
     catch erlang:suspend_process(Pid),
 
     [BarFDI, BazFDI] = couch_db_engine:open_docs(Db3, [<<"bar">>, <<"baz">>]),

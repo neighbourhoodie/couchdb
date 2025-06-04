@@ -71,7 +71,7 @@ can_get_db_info(DbName) ->
 can_compact_db(DbName) ->
     ?_test(begin
         couch_util:with_db(DbName, fun(Db) ->
-            couch_db:start_compact(Db),
+            couch_db:start_compact(Db, 0),
             couch_db:wait_for_compaction(Db)
         end)
     end).
