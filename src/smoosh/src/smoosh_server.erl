@@ -293,10 +293,8 @@ start_event_listener() ->
 
 enqueue_request(State, Object) ->
     try
-        case find_channel(State, Object) of
-            false ->
-                ok;
-            {ok, Pid, Priority} ->
+        lists:map(
+            fun({ok, Pid, Priority, Gen}) ->
                 case ets:info(?ACCESS, size) of
                     Size when Size =< ?ACCESS_MAX_SIZE ->
                         ok = update_access(Object);
@@ -304,8 +302,10 @@ enqueue_request(State, Object) ->
                         ok
                 end,
                 QuantizedPriority = quantize(Priority),
-                smoosh_channel:enqueue(Pid, Object, QuantizedPriority)
-        end
+                smoosh_channel:enqueue(Pid, Object, Gen, QuantizedPriority)
+            end,
+            find_channels(State, Object)
+        )
     catch
         Tag:Exception:Stack ->
             Args = [?MODULE, Tag, Exception, smoosh_utils:stringify(Object), Stack],
@@ -313,31 +313,40 @@ enqueue_request(State, Object) ->
             ok
     end.
 
-find_channel(#state{} = State, {?INDEX_CLEANUP, DbName}) ->
-    find_channel(State, State#state.cleanup_channels, {?INDEX_CLEANUP, DbName});
-find_channel(#state{} = State, {Shard, GroupId}) when is_binary(Shard) ->
-    find_channel(State, State#state.view_channels, {Shard, GroupId});
-find_channel(#state{} = State, DbName) ->
-    find_channel(State, State#state.db_channels, DbName).
+find_channels(#state{} = State, {?INDEX_CLEANUP, DbName}) ->
+    find_channels(State, State#state.cleanup_channels, {?INDEX_CLEANUP, DbName}, []);
+find_channels(#state{} = State, {Shard, GroupId}) when is_binary(Shard) ->
+    find_channels(State, State#state.view_channels, {Shard, GroupId}, []);
+find_channels(#state{} = State, DbName) ->
+    find_channels(State, State#state.db_channels, DbName, []).
 
-find_channel(#state{} = _State, [], _Object) ->
-    false;
-find_channel(#state{} = State, [Channel | Rest], Object) ->
+find_channels(#state{} = _State, [], _Object, Acc) ->
+    Acc;
+find_channels(#state{} = State, [Channel | Rest], Object, Acc) ->
+    RestChannels = find_channels(State, Rest, Object, Acc),
     case stale_enough(Object) of
         true ->
             case smoosh_utils:ignore_db(Object) of
                 true ->
-                    find_channel(State, Rest, Object);
+                    RestChannels;
                 _ ->
-                    case get_priority(Channel, Object) of
-                        0 ->
-                            find_channel(State, Rest, Object);
-                        Priority ->
-                            {ok, channel_pid(Channel), Priority}
-                    end
+                    Priorities = get_priority(Channel, Object),
+                    PrioWithGen = lists:zip(lists:seq(0, length(Priorities) - 1), Priorities),
+                    lists:foldr(
+                        fun({Gen, Priority}, Acc) ->
+                            case Priority of
+                                0 ->
+                                    Acc;
+                                P ->
+                                    [{ok, channel_pid(Channel), P, Gen} | Acc]
+                            end
+                        end,
+                        RestChannels,
+                        PrioWithGen
+                    )
             end;
         false ->
-            find_channel(State, Rest, Object)
+            RestChannels
     end.
 
 stale_enough(Object) ->
@@ -375,11 +384,11 @@ create_missing_channels_type([Channel | Rest]) ->
 
 get_priority(_Channel, {?INDEX_CLEANUP, DbName}) ->
     try mem3:local_shards(mem3:dbname(DbName)) of
-        [_ | _] -> 1;
-        [] -> 0
+        [_ | _] -> [1];
+        [] -> [0]
     catch
         error:database_does_not_exist ->
-            0
+            [0]
     end;
 get_priority(Channel, {Shard, GroupId}) ->
     try couch_index_server:get_index(couch_mrview_index, Shard, GroupId) of
@@ -390,24 +399,24 @@ get_priority(Channel, {Shard, GroupId}) ->
                 DiskSize = couch_util:get_value(file, SizeInfo),
                 ActiveSize = couch_util:get_value(active, SizeInfo),
                 NeedsUpgrade = needs_upgrade(ViewInfo),
-                get_priority(Channel, DiskSize, ActiveSize, NeedsUpgrade)
+                [get_priority(Channel, DiskSize, ActiveSize, NeedsUpgrade)]
             catch
                 exit:{timeout, _} ->
-                    0
+                    [0]
             end;
         {not_found, _Reason} ->
-            0;
+            [0];
         {database_does_not_exist, _Stack} ->
-            0;
+            [0];
         {error, Reason} ->
             couch_log:warning(
                 "Failed to get group_pid for ~p ~p ~p: ~p",
                 [Channel, Shard, GroupId, Reason]
             ),
-            0
+            [0]
     catch
         throw:{not_found, _} ->
-            0
+            [0]
     end;
 get_priority(Channel, DbName) when is_binary(DbName) ->
     case couch_db:open_int(DbName, []) of
@@ -419,18 +428,22 @@ get_priority(Channel, DbName) when is_binary(DbName) ->
             end;
         {not_found, no_db_file} ->
             % It's expected that a db might be deleted while waiting in queue
-            0
+            [0]
     end;
 get_priority(Channel, Db) ->
     {ok, DocInfo} = couch_db:get_db_info(Db),
-    {SizeInfo} = couch_util:get_value(sizes, DocInfo),
-    DiskSize = couch_util:get_value(file, SizeInfo),
-    ActiveSize = couch_util:get_value(active, SizeInfo),
-    NeedsUpgrade = needs_upgrade(DocInfo),
-    case db_changed(Channel, DocInfo) of
-        true -> get_priority(Channel, DiskSize, ActiveSize, NeedsUpgrade);
-        false -> 0
-    end.
+    lists:map(
+        fun({SizeInfo}) ->
+            DiskSize = couch_util:get_value(file, SizeInfo),
+            ActiveSize = couch_util:get_value(active, SizeInfo),
+            NeedsUpgrade = needs_upgrade(DocInfo),
+            case db_changed(Channel, DocInfo) of
+                true -> get_priority(Channel, DiskSize, ActiveSize, NeedsUpgrade);
+                false -> 0
+            end
+        end,
+        couch_util:get_value(sizes, DocInfo)
+    ).
 
 get_priority(Channel, DiskSize, DataSize, NeedsUpgrade) ->
     Priority = get_priority(Channel),
