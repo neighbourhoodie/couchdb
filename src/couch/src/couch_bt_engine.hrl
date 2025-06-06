@@ -13,7 +13,7 @@
 -record(st, {
     filepath,
     fd,
-    fd_monitor,
+    gen_fds = [],
     % deprecated but keeping it here to avoid altering the record size
     fsync_options_deprecated,
     header,
@@ -23,6 +23,5 @@
     local_tree,
     compression,
     purge_tree,
-    purge_seq_tree,
-    gen_fds = []
+    purge_seq_tree
 }).

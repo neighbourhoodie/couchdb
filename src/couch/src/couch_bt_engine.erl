@@ -35,6 +35,7 @@
     get_disk_version/1,
     get_doc_count/1,
     get_epochs/1,
+    get_fd/1,
     get_fd/2,
     get_purge_seq/1,
     get_oldest_purge_seq/1,
@@ -85,7 +86,7 @@
 ]).
 
 -export([
-    init_state/4
+    init_state/5
 ]).
 
 -export([
@@ -187,47 +188,73 @@ init(FilePath, Options) ->
         end,
     OpenGen = couch_bt_engine_header:max_generation(Header),
     GenFds = maybe_open_generation_files(FilePath, OpenGen, Options),
-    {ok, init_state(FilePath, [Fd | GenFds], Header, Options)}.
+    {ok, init_state(FilePath, Fd, GenFds, Header, Options)}.
 
 terminate(_Reason, St) ->
     % If the reason we died is because our fd disappeared
     % then we don't need to try closing it again.
-    Ref = St#st.fd_monitor,
-    if
-        Ref == closed ->
-            ok;
-        true ->
-            ok = couch_file:close(St#st.fd),
-            receive
-                {'DOWN', Ref, _, _, _} ->
-                    ok
-            after 500 ->
-                ok
-            end
-    end,
-    couch_util:shutdown_sync(St#st.fd),
+    lists:foreach(
+        fun({Fd, Ref}) ->
+            if
+                Ref == closed ->
+                    ok;
+                true ->
+                    ok = couch_file:close(Fd),
+                    receive
+                        {'DOWN', Ref, _, _, _} ->
+                            ok
+                    after 500 ->
+                        ok
+                    end
+            end,
+            couch_util:shutdown_sync(Fd)
+        end,
+        [St#st.fd | St#st.gen_fds]
+    ),
     ok.
 
 handle_db_updater_call(Msg, St) ->
     {stop, {invalid_call, Msg}, {invalid_call, Msg}, St}.
 
-handle_db_updater_info({'DOWN', Ref, _, _, _}, #st{fd_monitor = Ref} = St) ->
-    {stop, normal, St#st{fd = undefined, fd_monitor = closed}}.
+handle_db_updater_info({'DOWN', Ref, _, _, _}, #st{} = St) ->
+    {Fd, GenFds} = update_fd_monitors(St#st.fd, St#st.gen_fds, Ref),
+    St1 = St#st{fd = Fd, gen_fds = GenFds},
+    {stop, normal, St1}.
 
-incref(St) ->
-    {ok, St#st{fd_monitor = erlang:monitor(process, St#st.fd)}}.
+update_fd_monitors({_Fd, Ref}, GenFds, Ref) ->
+    {{undefined, closed}, GenFds};
+update_fd_monitors(Fd, [{_Fd, Ref} | Rest], Ref) ->
+    {Fd, [{undefined, closed} | Rest]};
+update_fd_monitors(Fd0, [First | Rest], Ref) ->
+    {Fd, GenFds} = update_fd_monitors(Fd0, Rest, Ref),
+    {Fd, [First | GenFds]}.
 
-decref(St) ->
-    true = erlang:demonitor(St#st.fd_monitor, [flush]),
+incref(#st{fd = {Fd, _}, gen_fds = GenFds0} = St) ->
+    Ref = erlang:monitor(process, Fd),
+    GenFds = [{Fd, erlang:monitor(process, Fd)} || {Fd, _} <- GenFds0],
+    {ok, St#st{fd = {Fd, Ref}, gen_fds = GenFds}}.
+
+decref(#st{} = St) ->
+    lists:foreach(
+        fun({_, Ref}) ->
+            true = erlang:demonitor(Ref, [flush])
+        end,
+        [St#st.fd | St#st.gen_fds]
+    ),
     ok.
 
-monitored_by(St) ->
-    case erlang:process_info(St#st.fd, monitored_by) of
-        {monitored_by, Pids} ->
-            lists:filter(fun is_pid/1, Pids);
-        _ ->
-            []
-    end.
+monitored_by(#st{fd = Fd, gen_fds = GenFds}) ->
+    lists:flatmap(
+        fun(Fd) ->
+            case erlang:process_info(Fd, monitored_by) of
+                {monitored_by, Pids} ->
+                    lists:filter(fun is_pid/1, Pids);
+                _ ->
+                    []
+            end
+        end,
+        [Fd || {Fd, _} <- [Fd | GenFds]]
+    ).
 
 get_compacted_seq(#st{header = Header}) ->
     couch_bt_engine_header:get(Header, compacted_seq).
@@ -331,7 +358,7 @@ get_security(#st{header = Header} = St) ->
         undefined ->
             [];
         Pointer ->
-            {ok, SecProps} = couch_file:pread_term(St#st.fd, Pointer),
+            {ok, SecProps} = couch_file:pread_term(get_fd(St), Pointer),
             SecProps
     end.
 
@@ -340,7 +367,7 @@ get_props(#st{header = Header} = St) ->
         undefined ->
             [];
         Pointer ->
-            {ok, Props} = couch_file:pread_term(St#st.fd, Pointer),
+            {ok, Props} = couch_file:pread_term(get_fd(St), Pointer),
             Props
     end.
 
@@ -370,7 +397,7 @@ set_purge_infos_limit(#st{header = Header} = St, PurgeInfosLimit) ->
 
 set_security(#st{header = Header} = St, NewSecurity) ->
     Options = [{compression, St#st.compression}],
-    {ok, Ptr, _} = couch_file:append_term(St#st.fd, NewSecurity, Options),
+    {ok, Ptr, _} = couch_file:append_term(get_fd(St), NewSecurity, Options),
     NewSt = St#st{
         header = couch_bt_engine_header:set(Header, [
             {security_ptr, Ptr}
@@ -381,7 +408,7 @@ set_security(#st{header = Header} = St, NewSecurity) ->
 
 set_props(#st{header = Header} = St, Props) ->
     Options = [{compression, St#st.compression}],
-    {ok, Ptr, _} = couch_file:append_term(St#st.fd, Props, Options),
+    {ok, Ptr, _} = couch_file:append_term(get_fd(St), Props, Options),
     NewSt = St#st{
         header = couch_bt_engine_header:set(Header, [
             {props_ptr, Ptr}
@@ -450,10 +477,14 @@ serialize_doc(#st{} = St, #doc{} = Doc) ->
         meta = [{comp_body, Body} | Doc#doc.meta]
     }.
 
-get_fd(#st{fd = Fd}, 0) ->
+get_fd(#st{fd = {Fd, _}}) ->
+    Fd.
+
+get_fd(#st{fd = {Fd, _}}, 0) ->
     Fd;
 get_fd(#st{gen_fds = GenFds}, Gen) ->
-    lists:nth(Gen, GenFds).
+    {Fd, _} = lists:nth(Gen, GenFds),
+    Fd.
 
 write_doc_body(St, #doc{} = Doc) ->
     % New doc bodies start with generation 0
@@ -588,10 +619,10 @@ copy_purge_infos(#st{} = St, PurgeInfos) ->
 
 commit_data(St) ->
     #st{
-        fd = Fd,
         header = OldHeader,
         needs_commit = NeedsCommit
     } = St,
+    Fd = get_fd(St),
 
     NewHeader = update_header(St, OldHeader),
 
@@ -622,7 +653,7 @@ open_read_stream(#st{} = St, StreamSt0) ->
     {ok, {couch_bt_engine_stream, {Fd, Gen, StreamSt}}}.
 
 is_active_stream(#st{} = St, {couch_bt_engine_stream, {Fd, _, _}}) ->
-    Fds = [St#st.fd | St#st.gen_fds],
+    Fds = [Fd || {Fd, _} <- [St#st.fd | St#st.gen_fds]],
     lists:member(Fd, Fds);
 is_active_stream(_, _) ->
     false.
@@ -864,7 +895,7 @@ set_update_seq(#st{header = Header} = St, UpdateSeq) ->
 
 copy_security(#st{header = Header} = St, SecProps) ->
     Options = [{compression, St#st.compression}],
-    {ok, Ptr, _} = couch_file:append_term(St#st.fd, SecProps, Options),
+    {ok, Ptr, _} = couch_file:append_term(get_fd(St), SecProps, Options),
     {ok, St#st{
         header = couch_bt_engine_header:set(Header, [
             {security_ptr, Ptr}
@@ -874,7 +905,7 @@ copy_security(#st{header = Header} = St, SecProps) ->
 
 copy_props(#st{header = Header} = St, Props) ->
     Options = [{compression, St#st.compression}],
-    {ok, Ptr, _} = couch_file:append_term(St#st.fd, Props, Options),
+    {ok, Ptr, _} = couch_file:append_term(get_fd(St), Props, Options),
     {ok, St#st{
         header = couch_bt_engine_header:set(Header, [
             {props_ptr, Ptr}
@@ -915,13 +946,15 @@ open_generation_file(FilePath, Gen, Options) ->
 
 open_generation_file(FilePath, Gen, Suffix, Options) ->
     GenFilePath = generation_file_path(FilePath, Gen) ++ Suffix,
-    case couch_file:open(GenFilePath, [nologifmissing | Options]) of
-        {ok, Db} ->
-            Db;
-        {error, enoent} ->
-            {ok, Fd} = couch_file:open(GenFilePath, [create]),
-            Fd
-    end.
+    Fd =
+        case couch_file:open(GenFilePath, [nologifmissing | Options]) of
+            {ok, Db} ->
+                Db;
+            {error, enoent} ->
+                {ok, Db} = couch_file:open(GenFilePath, [create]),
+                Db
+        end,
+    {Fd, erlang:monitor(process, Fd)}.
 
 open_generation_files(_FilePath, 0, _Options) ->
     [];
@@ -965,8 +998,7 @@ reopen_generation_file(FilePath, Gen, [_ | Fds], 1) ->
 reopen_generation_file(FilePath, Gen, [Fd | Fds], G) ->
     [Fd | reopen_generation_file(FilePath, Gen, Fds, G - 1)].
 
-init_state(FilePath, Fds, Header0, Options) ->
-    [Fd | GenFds] = Fds,
+init_state(FilePath, Fd, GenFds, Header0, Options) ->
     ok = couch_file:sync(Fd),
 
     Compression = couch_compress:get_compression_method(),
@@ -1016,8 +1048,8 @@ init_state(FilePath, Fds, Header0, Options) ->
 
     St = #st{
         filepath = FilePath,
-        fd = Fd,
-        fd_monitor = erlang:monitor(process, Fd),
+        fd = {Fd, erlang:monitor(process, Fd)},
+        gen_fds = [{Fd, erlang:monitor(process, Fd)} || {Fd, _} <- GenFds],
         header = Header,
         needs_commit = false,
         id_tree = IdTree,
@@ -1025,8 +1057,7 @@ init_state(FilePath, Fds, Header0, Options) ->
         local_tree = LocalTree,
         compression = Compression,
         purge_tree = PurgeTree,
-        purge_seq_tree = PurgeSeqTree,
-        gen_fds = GenFds
+        purge_seq_tree = PurgeSeqTree
     },
 
     % If this is a new database we've just created a
