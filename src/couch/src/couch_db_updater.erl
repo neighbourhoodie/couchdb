@@ -433,6 +433,8 @@ generation_pointer(Ptr) when is_integer(Ptr) ->
     {0, Ptr};
 generation_pointer(Ptr) when is_list(Ptr) ->
     {0, Ptr};
+generation_pointer(undefined) ->
+    {0, undefined};
 generation_pointer({Gen, Ptr}) ->
     {Gen, Ptr}.
 

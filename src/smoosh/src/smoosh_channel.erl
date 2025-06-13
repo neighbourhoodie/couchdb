@@ -272,7 +272,7 @@ maybe_start_compaction(Concurrency, #state{} = State) ->
     case smoosh_priority_queue:out(State#state.waiting) of
         false ->
             State;
-        {Key, Q} ->
+        {{Key, Gen}, Q} ->
             State1 = State#state{waiting = Q},
             % Re-check priority since by the time the object was in queue, or
             % was un-persisted after a node was down, the db or ddoc might be
@@ -281,7 +281,7 @@ maybe_start_compaction(Concurrency, #state{} = State) ->
             State2 =
                 case priority(State1, Key) of
                     0 -> State1;
-                    _ -> try_compact(State1, Key)
+                    _ -> try_compact(State1, {Key, Gen})
                 end,
             maybe_start_compaction(Concurrency, State2)
     end.
@@ -532,19 +532,19 @@ teardown_purge_seq({Ctx, DbName}) ->
 t_start_db_with_missing_db({_, _}) ->
     State = #state{name = "ratio_dbs"},
     meck:reset(couch_log),
-    try_compact(State, <<"missing_db">>),
+    try_compact(State, {<<"missing_db">>, 0}),
     ?assertEqual(1, meck:num_calls(couch_log, warning, 2)).
 
 t_start_view_with_missing_db({_, _}) ->
     State = #state{name = "ratio_views"},
     meck:reset(couch_log),
-    try_compact(State, {<<"missing_db">>, <<"_design/nope">>}),
+    try_compact(State, {{<<"missing_db">>, <<"_design/nope">>}, 0}),
     ?assertEqual(1, meck:num_calls(couch_log, warning, 2)).
 
 t_start_view_with_missing_index({_, DbName}) ->
     State = #state{name = "ratio_views"},
     meck:reset(couch_log),
-    try_compact(State, {DbName, <<"_design/nope">>}),
+    try_compact(State, {{DbName, <<"_design/nope">>}, 0}),
     ?assertEqual(1, meck:num_calls(couch_log, warning, 2)).
 
 t_start_compact_throws({_, _}) ->
@@ -552,7 +552,7 @@ t_start_compact_throws({_, _}) ->
     % Make something explode inside start_compact, so pick smoosh_util:ignore/1
     meck:expect(smoosh_utils, ignore_db, 1, meck:raise(error, foo)),
     meck:reset(couch_log),
-    try_compact(State, {<<"some_db">>, <<"_design/some_view">>}),
+    try_compact(State, {{<<"some_db">>, <<"_design/some_view">>}, 0}),
     ?assertEqual(1, meck:num_calls(couch_log, warning, 2)).
 
 -endif.

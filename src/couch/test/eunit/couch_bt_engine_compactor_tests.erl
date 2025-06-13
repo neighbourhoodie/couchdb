@@ -121,7 +121,7 @@ create_docs(DbName) ->
 
 compact_db(DbName) ->
     couch_util:with_db(DbName, fun(Db) ->
-        {ok, _} = couch_db:start_compact(Db, 0)
+        {ok, _} = couch_db:start_compact(Db)
     end),
     wait_db_compact_done(DbName, ?WAIT_DELAY_COUNT).
 

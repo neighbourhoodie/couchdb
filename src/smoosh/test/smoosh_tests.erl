@@ -461,7 +461,8 @@ wait_to_enqueue({index_cleanup, DbName}) when is_binary(DbName) ->
     wait_enqueue({index_cleanup, DbName}).
 
 wait_enqueue(Obj) ->
-    Enqueue = {enqueue, Obj, '_'},
+    FakeGen = 0,
+    Enqueue = {enqueue, Obj, FakeGen, '_'},
     meck:wait(smoosh_channel, handle_cast, [Enqueue, '_'], 4000).
 
 shard_name(DbName) ->

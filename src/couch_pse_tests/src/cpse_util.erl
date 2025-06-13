@@ -616,7 +616,7 @@ list_diff([T1 | R1], [T2 | R2]) ->
     end.
 
 compact(Db) ->
-    {ok, Pid} = couch_db:start_compact(Db, 0),
+    {ok, Pid} = couch_db:start_compact(Db),
     Ref = erlang:monitor(process, Pid),
 
     % Ideally I'd assert that Pid is linked to us

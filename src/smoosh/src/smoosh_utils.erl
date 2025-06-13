@@ -44,8 +44,10 @@ split(CSV) ->
 
 stringify({?INDEX_CLEANUP, DbName}) ->
     io_lib:format("~s index_cleanup", [DbName]);
-stringify({DbName, GroupId}) ->
+stringify({DbName, GroupId}) when is_binary(GroupId) ->
     io_lib:format("~s ~s", [DbName, GroupId]);
+stringify({DbName, Gen}) when is_integer(Gen) ->
+    io_lib:format("~s (gen=~p)", [DbName, Gen]);
 stringify(DbName) ->
     io_lib:format("~s", [DbName]).
 

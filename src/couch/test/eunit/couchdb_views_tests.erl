@@ -989,7 +989,7 @@ restore_backup_db_file(DbName) ->
 
 compact_db(DbName) ->
     {ok, Db} = couch_db:open_int(DbName, []),
-    {ok, _} = couch_db:start_compact(Db, 0),
+    {ok, _} = couch_db:start_compact(Db),
     ok = couch_db:close(Db),
     wait_db_compact_done(DbName, ?WAIT_DELAY_COUNT).
 
