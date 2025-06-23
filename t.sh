@@ -310,9 +310,12 @@ check_sizing () {
 }
 
 check_smoosh_trigger () {
+  create-doc '_design/the-views' '{ "views": { "by-n": { "map": "function (doc) { emit(doc.n, doc) }" } } }'
+
   for n in {1..1000} ; do
-    create-doc "doc-$n" '{ "a": "doc" }'
+    create-doc "doc-$n" '{ "a": "doc", "n": '$n' }'
   done
+
   cdb '/asd' | jq '.sizes'
 }
 
@@ -331,6 +334,18 @@ JSON
   cdb '/asd/_design/foo'
 
   tree $DATA
+}
+
+check_partition_overflow () {
+  cdb '/_node/_local/_config/couchdb/max_partition_size' -X PUT -d '"10240"'
+
+  cdb '/asd' -X DELETE
+  cdb '/asd?partitioned=true&q=1' -X PUT
+
+  local docs="$(ruby -rjson -e 'puts JSON.dump((1..15).map { |i| { "_id" => "foo:" + i.to_s.rjust(4, "0"), "value" => "0".rjust(1024, "0") } })')"
+  cdb '/asd/_bulk_docs' -iX POST -d '{ "w": 3, "docs": '"${docs}"' }'
+
+  cdb '/asd/_bulk_docs?w=3' -iX POST -d '{ "w": 3, "docs": [{ "_id": "foo:bar" }, { "_id": "baz:bang" }]}'
 }
 
 ########################################################################
