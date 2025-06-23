@@ -283,6 +283,19 @@ test_copy_doc_on_moving_attachment () {
   check-files 'UPDATED BODY'        0 2 0 0
 }
 
+check_continued_readability () {
+  create-doc 'doc-1' '{ "the": ["first", "doc"] }'
+  compact 0
+
+  let n=1
+  while :; do
+    sleep 1
+    echo "n: $n"
+    cdb '/asd/doc-1'
+    let n=n+1
+  done
+}
+
 check_sizing () {
   create-doc 'doc-1' '{ "the": ["first", "doc"] }'
 
@@ -292,6 +305,32 @@ check_sizing () {
     compact "$n"
     cdb '/asd' | jq '.sizes'
   done
+
+  create-doc 'doc-2' '{ "the": ["second", "doc"] }'
+}
+
+check_smoosh_trigger () {
+  for n in {1..1000} ; do
+    create-doc "doc-$n" '{ "a": "doc" }'
+  done
+  cdb '/asd' | jq '.sizes'
+}
+
+check_views () {
+  cdb '/asd/_design/foo' -X PUT -d @- <<JSON
+    {
+      "views": {
+        "by-title": {
+          "map": "function (doc) { emit(doc.title) }"
+        }
+      }
+    }
+JSON
+
+  create-doc '/asd/doc-1' '{ "title": "Hello world" }'
+  cdb '/asd/_design/foo'
+
+  tree $DATA
 }
 
 ########################################################################
