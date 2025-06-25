@@ -316,7 +316,7 @@ try_compact(#state{name = Name} = State, Key) ->
             State
     end.
 
-start_compact(#state{} = State, {{?INDEX_CLEANUP, DbName} = Key, _Gen}) ->
+start_compact(#state{} = State, {{?INDEX_CLEANUP, DbName}, _Gen} = Key) ->
     #state{name = Name, active = Active} = State,
     case smoosh_utils:ignore_db(DbName) of
         false ->
@@ -343,7 +343,7 @@ start_compact(#state{name = Name} = State, {DbName, Gen}) when is_binary(DbName)
             couch_log:warning(LogMsg, LogArgs),
             false
     end;
-start_compact(#state{} = State, {{Shard, GroupId} = Key, _Gen}) ->
+start_compact(#state{} = State, {{Shard, GroupId}, _Gen} = Key) ->
     #state{name = Name, starting = Starting} = State,
     case smoosh_utils:ignore_db({Shard, GroupId}) of
         false ->
@@ -364,8 +364,9 @@ start_compact(#state{} = State, {{Shard, GroupId} = Key, _Gen}) ->
     end;
 start_compact(#state{} = State, {Db, Gen}) ->
     #state{name = Name, starting = Starting, active = Active} = State,
-    Key = couch_db:name(Db),
-    case smoosh_utils:ignore_db(Key) of
+    DbName = couch_db:name(Db),
+    Key = {DbName, Gen},
+    case smoosh_utils:ignore_db(DbName) of
         false ->
             case couch_db:get_compactor_pid(Db) of
                 nil ->
