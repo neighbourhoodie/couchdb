@@ -302,7 +302,7 @@ enqueue_request(State, Object) ->
                         ok
                 end,
                 QuantizedPriority = quantize(Priority),
-                smoosh_channel:enqueue(Pid, Object, Gen, QuantizedPriority)
+                smoosh_channel:enqueue(Pid, {Object, Gen}, QuantizedPriority)
             end,
             find_channels(State, Object)
         )

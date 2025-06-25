@@ -15,7 +15,7 @@
 
 % public api.
 -export([start_link/1, close/1, suspend/1, resume/1, get_status/1]).
--export([enqueue/4, flush/1]).
+-export([enqueue/3, flush/1]).
 -export([get_status_table/1]).
 
 % gen_server api.
@@ -71,8 +71,8 @@ suspend(ServerRef) ->
 resume(ServerRef) ->
     gen_server:call(ServerRef, resume).
 
-enqueue(ServerRef, Object, Gen, Priority) ->
-    gen_server:cast(ServerRef, {enqueue, Object, Gen, Priority}).
+enqueue(ServerRef, Object, Priority) ->
+    gen_server:cast(ServerRef, {enqueue, Object, Priority}).
 
 get_status(StatusTab) when is_reference(StatusTab) ->
     try ets:lookup(StatusTab, status) of
@@ -121,8 +121,8 @@ handle_call(flush, _From, #state{waiting = Q} = State) ->
     State2 = set_status(State1),
     {reply, ok, State2}.
 
-handle_cast({enqueue, Object, Gen, Priority}, #state{} = State) ->
-    State1 = add_to_queue(Object, Gen, Priority, State),
+handle_cast({enqueue, Object, Priority}, #state{} = State) ->
+    State1 = add_to_queue(Object, Priority, State),
     {noreply, maybe_start_compaction(State1)}.
 
 handle_info({'DOWN', Ref, _, _, _}, #state{cref = Ref} = State) ->
@@ -243,7 +243,7 @@ set_status(#state{} = State) ->
     true = ets:insert(State#state.stab, {status, Status}),
     State.
 
-add_to_queue(Key, Gen, Priority, State) ->
+add_to_queue(Key, Priority, State) ->
     #state{name = Name, active = Active, waiting = Q} = State,
     case is_map_key(Key, Active) of
         true ->
@@ -254,7 +254,7 @@ add_to_queue(Key, Gen, Priority, State) ->
             LogMsg = "~s: enqueueing ~p to compact with priority ~p",
             LogArgs = [Name, Key, Priority],
             couch_log:Level(LogMsg, LogArgs),
-            Q1 = smoosh_priority_queue:in({Key, Gen}, Priority, Capacity, Q),
+            Q1 = smoosh_priority_queue:in(Key, Priority, Capacity, Q),
             State#state{waiting = Q1}
     end.
 
