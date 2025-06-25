@@ -13,7 +13,7 @@
 -module(couch_db_updater).
 -behaviour(gen_server).
 
--export([add_sizes/3, map_sizes/2, upgrade_sizes/1]).
+-export([add_sizes/3, map_sizes/2, sum_sizes/1, upgrade_sizes/1]).
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2]).
 -export([generation_pointer/1, canonical_pointer/1]).
 
@@ -473,6 +473,20 @@ map_sizes(Fun, Sizes) when is_list(Sizes) ->
     lists:map(Fun, Sizes);
 map_sizes(Fun, Sizes) ->
     Fun(Sizes).
+
+sum_sizes(SI) when is_list(SI) ->
+    lists:foldl(
+        fun(A, B) ->
+            #size_info{
+                active = A#size_info.active + B#size_info.active,
+                external = A#size_info.external + B#size_info.external
+            }
+        end,
+        #size_info{active = 0, external = 0},
+        SI
+    );
+sum_sizes(#size_info{} = SI) ->
+    SI.
 
 upgrade_sizes([S]) ->
     upgrade_sizes(S);

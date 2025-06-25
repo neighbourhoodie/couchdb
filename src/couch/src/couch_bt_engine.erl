@@ -342,7 +342,8 @@ get_partition_info(#st{} = St, Partition) ->
     InitAcc = {Partition, 0, 0, #size_info{}},
     Options = [{start_key, StartKey}, {end_key, EndKey}],
     {ok, _, OutAcc} = couch_btree:fold(St#st.id_tree, Fun, InitAcc, Options),
-    {Partition, DocCount, DocDelCount, SizeInfo} = OutAcc,
+    {Partition, DocCount, DocDelCount, SizeInfo0} = OutAcc,
+    SizeInfo = couch_db_updater:sum_sizes(SizeInfo0),
     [
         {partition, Partition},
         {doc_count, DocCount},
