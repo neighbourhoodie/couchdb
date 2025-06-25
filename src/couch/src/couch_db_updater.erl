@@ -13,7 +13,7 @@
 -module(couch_db_updater).
 -behaviour(gen_server).
 
--export([add_sizes/3, map_sizes/2, sum_sizes/1, upgrade_sizes/1]).
+-export([add_sizes/3, map_fold_sizes/1, sum_sizes/1, upgrade_sizes/1]).
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2]).
 -export([generation_pointer/1, canonical_pointer/1]).
 
@@ -380,16 +380,7 @@ flush_trees(
         Unflushed
     ),
 
-    GenSizes = map_sizes(
-        fun({FinalAS, FinalES, FinalAtts}) ->
-            TotalAttSize = lists:foldl(fun({_, S}, A) -> S + A end, 0, FinalAtts),
-            #size_info{
-                active = FinalAS + TotalAttSize,
-                external = FinalES + TotalAttSize
-            }
-        end,
-        FinalAcc
-    ),
+    GenSizes = map_fold_sizes(FinalAcc),
 
     NewInfo = InfoUnflushed#full_doc_info{
         rev_tree = Flushed,
@@ -469,10 +460,20 @@ add_sizes_leaf(#leaf{sizes = Sizes, atts = AttSizes}, Acc) ->
     NewAttsAcc = lists:umerge(AttSizes, AttsAcc),
     {NewASAcc, NewESAcc, NewAttsAcc}.
 
+map_fold_sizes(FinalSizesAcc) ->
+    map_sizes(fun fold_sizes/1, FinalSizesAcc).
+
 map_sizes(Fun, Sizes) when is_list(Sizes) ->
     lists:map(Fun, Sizes);
 map_sizes(Fun, Sizes) ->
     Fun(Sizes).
+
+fold_sizes({ActiveSize, ExternalSize, AttSizes}) ->
+    TotalAttSize = lists:foldl(fun({_, S}, A) -> S + A end, 0, AttSizes),
+    #size_info{
+        active = ActiveSize + TotalAttSize,
+        external = ExternalSize + TotalAttSize
+    }.
 
 sum_sizes(SI) when is_list(SI) ->
     lists:foldl(
@@ -845,10 +846,9 @@ estimate_size(#full_doc_info{} = FDI) ->
         (_Rev, _Value, branch, SizesAcc) ->
             SizesAcc
     end,
-    % TODO: this does not correctly handle multi-generation SizesAcc
-    {_, FinalES, FinalAtts} = couch_key_tree:fold(Fun, {0, 0, []}, RevTree),
-    TotalAttSize = lists:foldl(fun({_, S}, A) -> S + A end, 0, FinalAtts),
-    FinalES + TotalAttSize.
+    Sizes = couch_key_tree:fold(Fun, {0, 0, []}, RevTree),
+    #size_info{external = ES} = sum_sizes(map_fold_sizes(Sizes)),
+    ES.
 
 purge_docs(Db, []) ->
     {ok, Db, []};
