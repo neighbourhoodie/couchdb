@@ -13,7 +13,6 @@ smoosh_test_() ->
             fun setup/0,
             fun teardown/1,
             [
-                % TODO: fix failing tests
                 ?TDEF_FE(t_default_channels),
                 ?TDEF_FE(t_channels_recreated_on_crash),
                 ?TDEF_FE(t_can_create_and_delete_channels),
@@ -23,7 +22,7 @@ smoosh_test_() ->
                 ?TDEF_FE(t_index_cleanup_can_be_disabled, 10),
                 ?TDEF_FE(t_suspend_resume),
                 ?TDEF_FE(t_check_window_can_resume),
-                % ?TDEF_FE(t_renqueue_on_crashes),
+                ?TDEF_FE(t_renqueue_on_crashes),
                 ?TDEF_FE(t_update_status_works),
                 ?TDEF_FE(t_checkpointing_works, 10),
                 ?TDEF_FE(t_ignore_checkpoint_resume_if_compacted_already, 10),
@@ -462,8 +461,7 @@ wait_to_enqueue({index_cleanup, DbName}) when is_binary(DbName) ->
     wait_enqueue({index_cleanup, DbName}).
 
 wait_enqueue(Obj) ->
-    FakeGen = 0,
-    Enqueue = {enqueue, {Obj, FakeGen}, '_'},
+    Enqueue = {enqueue, Obj, '_'},
     meck:wait(smoosh_channel, handle_cast, [Enqueue, '_'], 4000).
 
 shard_name(DbName) ->

@@ -293,8 +293,10 @@ start_event_listener() ->
 
 enqueue_request(State, Object) ->
     try
-        lists:map(
-            fun({ok, Pid, Priority, Gen}) ->
+        case find_channel(State, Object) of
+            false ->
+                ok;
+            {ok, Pid, Priority} ->
                 case ets:info(?ACCESS, size) of
                     Size when Size =< ?ACCESS_MAX_SIZE ->
                         ok = update_access(Object);
@@ -302,10 +304,8 @@ enqueue_request(State, Object) ->
                         ok
                 end,
                 QuantizedPriority = quantize(Priority),
-                smoosh_channel:enqueue(Pid, {Object, Gen}, QuantizedPriority)
-            end,
-            find_channels(State, Object)
-        )
+                smoosh_channel:enqueue(Pid, Object, QuantizedPriority)
+        end
     catch
         Tag:Exception:Stack ->
             Args = [?MODULE, Tag, Exception, smoosh_utils:stringify(Object), Stack],
@@ -313,40 +313,31 @@ enqueue_request(State, Object) ->
             ok
     end.
 
-find_channels(#state{} = State, {?INDEX_CLEANUP, DbName}) ->
-    find_channels(State, State#state.cleanup_channels, {?INDEX_CLEANUP, DbName}, []);
-find_channels(#state{} = State, {Shard, GroupId}) when is_binary(Shard) ->
-    find_channels(State, State#state.view_channels, {Shard, GroupId}, []);
-find_channels(#state{} = State, DbName) ->
-    find_channels(State, State#state.db_channels, DbName, []).
+find_channel(#state{} = State, {?INDEX_CLEANUP, DbName}) ->
+    find_channel(State, State#state.cleanup_channels, {?INDEX_CLEANUP, DbName});
+find_channel(#state{} = State, {Shard, GroupId}) when is_binary(Shard) ->
+    find_channel(State, State#state.view_channels, {Shard, GroupId});
+find_channel(#state{} = State, DbName) ->
+    find_channel(State, State#state.db_channels, DbName).
 
-find_channels(#state{} = _State, [], _Object, Acc) ->
-    Acc;
-find_channels(#state{} = State, [Channel | Rest], Object, Acc) ->
-    RestChannels = find_channels(State, Rest, Object, Acc),
+find_channel(#state{} = _State, [], _Object) ->
+    false;
+find_channel(#state{} = State, [Channel | Rest], Object) ->
     case stale_enough(Object) of
         true ->
             case smoosh_utils:ignore_db(Object) of
                 true ->
-                    RestChannels;
+                    find_channel(State, Rest, Object);
                 _ ->
-                    Priorities = get_priority(Channel, Object),
-                    PrioWithGen = lists:zip(lists:seq(0, length(Priorities) - 1), Priorities),
-                    lists:foldr(
-                        fun({Gen, Priority}, Acc) ->
-                            case Priority of
-                                0 ->
-                                    Acc;
-                                P ->
-                                    [{ok, channel_pid(Channel), P, Gen} | Acc]
-                            end
-                        end,
-                        RestChannels,
-                        PrioWithGen
-                    )
+                    case get_priority(Channel, Object) of
+                        0 ->
+                            find_channel(State, Rest, Object);
+                        Priority ->
+                            {ok, channel_pid(Channel), Priority}
+                    end
             end;
         false ->
-            RestChannels
+            find_channel(State, Rest, Object)
     end.
 
 stale_enough(Object) ->
@@ -382,15 +373,13 @@ create_missing_channels_type([Channel | Rest]) ->
     end,
     create_missing_channels_type(Rest).
 
-get_priority(Channel, {Object, Gen}) when is_integer(Gen) ->
-    lists:nth(Gen + 1, get_priority(Channel, Object));
 get_priority(_Channel, {?INDEX_CLEANUP, DbName}) ->
     try mem3:local_shards(mem3:dbname(DbName)) of
-        [_ | _] -> [1];
-        [] -> [0]
+        [_ | _] -> 1;
+        [] -> 0
     catch
         error:database_does_not_exist ->
-            [0]
+            0
     end;
 get_priority(Channel, {Shard, GroupId}) ->
     try couch_index_server:get_index(couch_mrview_index, Shard, GroupId) of
@@ -401,24 +390,24 @@ get_priority(Channel, {Shard, GroupId}) ->
                 DiskSize = couch_util:get_value(file, SizeInfo),
                 ActiveSize = couch_util:get_value(active, SizeInfo),
                 NeedsUpgrade = needs_upgrade(ViewInfo),
-                [get_priority(Channel, DiskSize, ActiveSize, NeedsUpgrade)]
+                get_priority(Channel, DiskSize, ActiveSize, NeedsUpgrade)
             catch
                 exit:{timeout, _} ->
-                    [0]
+                    0
             end;
         {not_found, _Reason} ->
-            [0];
+            0;
         {database_does_not_exist, _Stack} ->
-            [0];
+            0;
         {error, Reason} ->
             couch_log:warning(
                 "Failed to get group_pid for ~p ~p ~p: ~p",
                 [Channel, Shard, GroupId, Reason]
             ),
-            [0]
+            0
     catch
         throw:{not_found, _} ->
-            [0]
+            0
     end;
 get_priority(Channel, DbName) when is_binary(DbName) ->
     case couch_db:open_int(DbName, []) of
@@ -430,22 +419,18 @@ get_priority(Channel, DbName) when is_binary(DbName) ->
             end;
         {not_found, no_db_file} ->
             % It's expected that a db might be deleted while waiting in queue
-            [0]
+            0
     end;
 get_priority(Channel, Db) ->
     {ok, DocInfo} = couch_db:get_db_info(Db),
-    lists:map(
-        fun({SizeInfo}) ->
-            DiskSize = couch_util:get_value(file, SizeInfo),
-            ActiveSize = couch_util:get_value(active, SizeInfo),
-            NeedsUpgrade = needs_upgrade(DocInfo),
-            case db_changed(Channel, DocInfo) of
-                true -> get_priority(Channel, DiskSize, ActiveSize, NeedsUpgrade);
-                false -> 0
-            end
-        end,
-        couch_util:get_value(sizes, DocInfo)
-    ).
+    {SizeInfo} = couch_util:get_value(sizes, DocInfo),
+    DiskSize = couch_util:get_value(file, SizeInfo),
+    ActiveSize = couch_util:get_value(active, SizeInfo),
+    NeedsUpgrade = needs_upgrade(DocInfo),
+    case db_changed(Channel, DocInfo) of
+        true -> get_priority(Channel, DiskSize, ActiveSize, NeedsUpgrade);
+        false -> 0
+    end.
 
 get_priority(Channel, DiskSize, DataSize, NeedsUpgrade) ->
     Priority = get_priority(Channel),
@@ -672,67 +657,67 @@ t_ratio_view({ok, Shard, GroupId}) ->
     meck:expect(couch_index, get_info, fun(_) ->
         {ok, [{sizes, {[{file, 5242880}, {active, 524288}]}}]}
     end),
-    ?assertEqual([10.0], get_priority("ratio_views", {Shard, GroupId})),
-    ?assertEqual([0], get_priority("slack_views", {Shard, GroupId})),
-    ?assertEqual([0], get_priority("upgrade_views", {Shard, GroupId})).
+    ?assertEqual(10.0, get_priority("ratio_views", {Shard, GroupId})),
+    ?assertEqual(0, get_priority("slack_views", {Shard, GroupId})),
+    ?assertEqual(0, get_priority("upgrade_views", {Shard, GroupId})).
 
 t_slack_view({ok, Shard, GroupId}) ->
     meck:expect(couch_index, get_info, fun(_) ->
         {ok, [{sizes, {[{file, 1073741824}, {active, 536870911}]}}]}
     end),
-    ?assertEqual([2.0000000037252903], get_priority("ratio_views", {Shard, GroupId})),
-    ?assertEqual([536870913], get_priority("slack_views", {Shard, GroupId})),
-    ?assertEqual([0], get_priority("upgrade_views", {Shard, GroupId})).
+    ?assertEqual(2.0000000037252903, get_priority("ratio_views", {Shard, GroupId})),
+    ?assertEqual(536870913, get_priority("slack_views", {Shard, GroupId})),
+    ?assertEqual(0, get_priority("upgrade_views", {Shard, GroupId})).
 
 t_no_data_view({ok, Shard, GroupId}) ->
     meck:expect(couch_index, get_info, fun(_) ->
         {ok, [{sizes, {[{file, 5242880}, {active, 0}]}}]}
     end),
-    ?assertEqual([2.0], get_priority("ratio_views", {Shard, GroupId})),
-    ?assertEqual([536870912], get_priority("slack_views", {Shard, GroupId})),
-    ?assertEqual([2.0], get_priority("upgrade_views", {Shard, GroupId})).
+    ?assertEqual(2.0, get_priority("ratio_views", {Shard, GroupId})),
+    ?assertEqual(536870912, get_priority("slack_views", {Shard, GroupId})),
+    ?assertEqual(2.0, get_priority("upgrade_views", {Shard, GroupId})).
 
 t_below_min_priority_view({ok, Shard, GroupId}) ->
     meck:expect(couch_index, get_info, fun(_) ->
         {ok, [{sizes, {[{file, 5242880}, {active, 1048576}]}}]}
     end),
-    ?assertEqual([5.0], get_priority("ratio_views", {Shard, GroupId})),
-    ?assertEqual([0], get_priority("slack_views", {Shard, GroupId})),
-    ?assertEqual([0], get_priority("upgrade_views", {Shard, GroupId})).
+    ?assertEqual(5.0, get_priority("ratio_views", {Shard, GroupId})),
+    ?assertEqual(0, get_priority("slack_views", {Shard, GroupId})),
+    ?assertEqual(0, get_priority("upgrade_views", {Shard, GroupId})).
 
 t_below_min_size_view({ok, Shard, GroupId}) ->
     meck:expect(couch_index, get_info, fun(_) ->
         {ok, [{sizes, {[{file, 1048576}, {active, 512000}]}}]}
     end),
-    ?assertEqual([0], get_priority("ratio_views", {Shard, GroupId})),
-    ?assertEqual([0], get_priority("slack_views", {Shard, GroupId})),
-    ?assertEqual([0], get_priority("upgrade_views", {Shard, GroupId})).
+    ?assertEqual(0, get_priority("ratio_views", {Shard, GroupId})),
+    ?assertEqual(0, get_priority("slack_views", {Shard, GroupId})),
+    ?assertEqual(0, get_priority("upgrade_views", {Shard, GroupId})).
 
 t_timeout_view({ok, Shard, GroupId}) ->
     meck:expect(couch_index, get_info, fun(_) ->
         exit({timeout, get_info})
     end),
-    ?assertEqual([0], get_priority("ratio_views", {Shard, GroupId})),
-    ?assertEqual([0], get_priority("slack_views", {Shard, GroupId})),
-    ?assertEqual([0], get_priority("upgrade_views", {Shard, GroupId})).
+    ?assertEqual(0, get_priority("ratio_views", {Shard, GroupId})),
+    ?assertEqual(0, get_priority("slack_views", {Shard, GroupId})),
+    ?assertEqual(0, get_priority("upgrade_views", {Shard, GroupId})).
 
 t_missing_db(_) ->
     ShardGroup = {<<"shards/80000000-ffffffff/db2.1666895357">>, <<"x">>},
-    ?assertEqual([0], get_priority("ratio_views", ShardGroup)),
-    ?assertEqual([0], get_priority("slack_views", ShardGroup)),
-    ?assertEqual([0], get_priority("upgrade_views", ShardGroup)).
+    ?assertEqual(0, get_priority("ratio_views", ShardGroup)),
+    ?assertEqual(0, get_priority("slack_views", ShardGroup)),
+    ?assertEqual(0, get_priority("upgrade_views", ShardGroup)).
 
 t_missing_view({ok, Shard, GroupId}) ->
     meck:expect(couch_index_server, get_index, 3, {not_found, missing}),
-    ?assertEqual([0], get_priority("ratio_views", {Shard, GroupId})),
-    ?assertEqual([0], get_priority("slack_views", {Shard, GroupId})),
-    ?assertEqual([0], get_priority("upgrade_views", {Shard, GroupId})).
+    ?assertEqual(0, get_priority("ratio_views", {Shard, GroupId})),
+    ?assertEqual(0, get_priority("slack_views", {Shard, GroupId})),
+    ?assertEqual(0, get_priority("upgrade_views", {Shard, GroupId})).
 
 t_invalid_view({ok, Shard, GroupId}) ->
     meck:expect(couch_index_server, get_index, 3, {error, undef}),
-    ?assertEqual([0], get_priority("ratio_views", {Shard, GroupId})),
-    ?assertEqual([0], get_priority("slack_views", {Shard, GroupId})),
-    ?assertEqual([0], get_priority("upgrade_views", {Shard, GroupId})).
+    ?assertEqual(0, get_priority("ratio_views", {Shard, GroupId})),
+    ?assertEqual(0, get_priority("slack_views", {Shard, GroupId})),
+    ?assertEqual(0, get_priority("upgrade_views", {Shard, GroupId})).
 
 config_listener_mon() ->
     IsConfigMonitor = fun(P) ->

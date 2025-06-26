@@ -316,7 +316,7 @@ try_compact(#state{name = Name} = State, Key) ->
             State
     end.
 
-start_compact(#state{} = State, {{?INDEX_CLEANUP, DbName}, _Gen} = Key) ->
+start_compact(#state{} = State, {?INDEX_CLEANUP, DbName} = Key) ->
     #state{name = Name, active = Active} = State,
     case smoosh_utils:ignore_db(DbName) of
         false ->
@@ -329,11 +329,11 @@ start_compact(#state{} = State, {{?INDEX_CLEANUP, DbName}, _Gen} = Key) ->
         _ ->
             false
     end;
-start_compact(#state{name = Name} = State, {DbName, Gen}) when is_binary(DbName) ->
+start_compact(#state{name = Name} = State, DbName) when is_binary(DbName) ->
     case couch_db:open_int(DbName, []) of
         {ok, Db} ->
             try
-                start_compact(State, {Db, Gen})
+                start_compact(State, Db)
             after
                 couch_db:close(Db)
             end;
@@ -343,7 +343,7 @@ start_compact(#state{name = Name} = State, {DbName, Gen}) when is_binary(DbName)
             couch_log:warning(LogMsg, LogArgs),
             false
     end;
-start_compact(#state{} = State, {{Shard, GroupId}, _Gen} = Key) ->
+start_compact(#state{} = State, {Shard, GroupId} = Key) ->
     #state{name = Name, starting = Starting} = State,
     case smoosh_utils:ignore_db({Shard, GroupId}) of
         false ->
@@ -362,17 +362,16 @@ start_compact(#state{} = State, {{Shard, GroupId}, _Gen} = Key) ->
         _ ->
             false
     end;
-start_compact(#state{} = State, {Db, Gen}) ->
+start_compact(#state{} = State, Db) ->
     #state{name = Name, starting = Starting, active = Active} = State,
-    DbName = couch_db:name(Db),
-    Key = {DbName, Gen},
-    case smoosh_utils:ignore_db(DbName) of
+    Key = couch_db:name(Db),
+    case smoosh_utils:ignore_db(Key) of
         false ->
             case couch_db:get_compactor_pid(Db) of
                 nil ->
                     DbPid = couch_db:get_pid(Db),
                     Ref = erlang:monitor(process, DbPid),
-                    DbPid ! {'$gen_call', {self(), Ref}, {start_compact, Gen}},
+                    DbPid ! {'$gen_call', {self(), Ref}, start_compact},
                     State#state{starting = Starting#{Ref => Key}};
                 % Compaction is already running, so monitor existing compaction pid.
                 CPid when is_pid(CPid) ->
@@ -533,19 +532,19 @@ teardown_purge_seq({Ctx, DbName}) ->
 t_start_db_with_missing_db({_, _}) ->
     State = #state{name = "ratio_dbs"},
     meck:reset(couch_log),
-    try_compact(State, {<<"missing_db">>, 0}),
+    try_compact(State, <<"missing_db">>),
     ?assertEqual(1, meck:num_calls(couch_log, warning, 2)).
 
 t_start_view_with_missing_db({_, _}) ->
     State = #state{name = "ratio_views"},
     meck:reset(couch_log),
-    try_compact(State, {{<<"missing_db">>, <<"_design/nope">>}, 0}),
+    try_compact(State, {<<"missing_db">>, <<"_design/nope">>}),
     ?assertEqual(1, meck:num_calls(couch_log, warning, 2)).
 
 t_start_view_with_missing_index({_, DbName}) ->
     State = #state{name = "ratio_views"},
     meck:reset(couch_log),
-    try_compact(State, {{DbName, <<"_design/nope">>}, 0}),
+    try_compact(State, {DbName, <<"_design/nope">>}),
     ?assertEqual(1, meck:num_calls(couch_log, warning, 2)).
 
 t_start_compact_throws({_, _}) ->
@@ -553,7 +552,7 @@ t_start_compact_throws({_, _}) ->
     % Make something explode inside start_compact, so pick smoosh_util:ignore/1
     meck:expect(smoosh_utils, ignore_db, 1, meck:raise(error, foo)),
     meck:reset(couch_log),
-    try_compact(State, {{<<"some_db">>, <<"_design/some_view">>}, 0}),
+    try_compact(State, {<<"some_db">>, <<"_design/some_view">>}),
     ?assertEqual(1, meck:num_calls(couch_log, warning, 2)).
 
 -endif.
