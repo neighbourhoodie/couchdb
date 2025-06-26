@@ -272,7 +272,7 @@ maybe_start_compaction(Concurrency, #state{} = State) ->
     case smoosh_priority_queue:out(State#state.waiting) of
         false ->
             State;
-        {{Key, Gen}, Q} ->
+        {Key, Q} ->
             State1 = State#state{waiting = Q},
             % Re-check priority since by the time the object was in queue, or
             % was un-persisted after a node was down, the db or ddoc might be
@@ -281,7 +281,7 @@ maybe_start_compaction(Concurrency, #state{} = State) ->
             State2 =
                 case priority(State1, Key) of
                     0 -> State1;
-                    _ -> try_compact(State1, {Key, Gen})
+                    _ -> try_compact(State1, Key)
                 end,
             maybe_start_compaction(Concurrency, State2)
     end.

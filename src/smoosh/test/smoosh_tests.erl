@@ -26,7 +26,7 @@ smoosh_test_() ->
                 % ?TDEF_FE(t_renqueue_on_crashes),
                 ?TDEF_FE(t_update_status_works),
                 ?TDEF_FE(t_checkpointing_works, 10),
-                % ?TDEF_FE(t_ignore_checkpoint_resume_if_compacted_already, 10),
+                ?TDEF_FE(t_ignore_checkpoint_resume_if_compacted_already, 10),
                 ?TDEF_FE(t_access_cleaner_restarts),
                 ?TDEF_FE(t_event_handler_restarts),
                 ?TDEF_FE(t_manual_enqueue_api_works),

@@ -382,6 +382,8 @@ create_missing_channels_type([Channel | Rest]) ->
     end,
     create_missing_channels_type(Rest).
 
+get_priority(Channel, {Object, Gen}) when is_integer(Gen) ->
+    lists:nth(Gen + 1, get_priority(Channel, Object));
 get_priority(_Channel, {?INDEX_CLEANUP, DbName}) ->
     try mem3:local_shards(mem3:dbname(DbName)) of
         [_ | _] -> [1];
