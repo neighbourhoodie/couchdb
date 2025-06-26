@@ -124,6 +124,9 @@ handle_db_event(DbName, local_updated, St) ->
 handle_db_event(DbName, updated, St) ->
     enqueue({DbName, 0}),
     {ok, St};
+handle_db_event(DbName, {compacted_into_generation, Gen}, St) ->
+    enqueue({DbName, Gen}),
+    {ok, St};
 handle_db_event(DbName, {index_commit, IdxName}, St) ->
     enqueue({DbName, IdxName}),
     {ok, St};

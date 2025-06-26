@@ -81,6 +81,7 @@
     count_changes_since/2,
 
     open_additional_generation_file/3,
+    increment_generation/2,
     start_compaction/5,
     finish_compaction/4
 ]).
@@ -1335,7 +1336,7 @@ fold_docs_reduce_to_count(Reds) ->
     FinalRed = couch_btree:final_reduce(RedFun, Reds),
     element(1, FinalRed).
 
-finish_compaction_int(#st{} = OldSt, #st{} = NewSt1, Generation) ->
+finish_compaction_int(#st{} = OldSt, #st{} = NewSt1, SrcGen) ->
     #st{
         filepath = FilePath,
         local_tree = OldLocal,
@@ -1394,7 +1395,7 @@ finish_compaction_int(#st{} = OldSt, #st{} = NewSt1, Generation) ->
     MaxGen = couch_bt_engine_header:max_generation(Header),
 
     NewGenFds =
-        case Generation of
+        case SrcGen of
             0 ->
                 OldGenFds;
             MaxGen ->
@@ -1416,13 +1417,23 @@ finish_compaction_int(#st{} = OldSt, #st{} = NewSt1, Generation) ->
     % We're finished with our old state
     decref(OldSt),
 
+    {_, DstGen} = increment_generation(NewSt2, SrcGen),
+
     % And return our finished new state
     {ok,
         NewSt2#st{
             filepath = FilePath,
             gen_fds = NewGenFds
         },
-        undefined}.
+        DstGen}.
+
+increment_generation(#st{header = Header}, Gen) ->
+    MaxGen = couch_bt_engine_header:max_generation(Header),
+    case {MaxGen, Gen} of
+        {0, _} -> {0, 0};
+        {M, M} -> {M + 1, M};
+        {_, G} -> {G + 1, G + 1}
+    end.
 
 cleanup_any_compacted_generation(FilePath) ->
     Dir = filename:dirname(FilePath),

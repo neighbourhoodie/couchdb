@@ -399,14 +399,6 @@ copy_compact(#comp_st{} = CompSt) ->
         new_st = NewSt6
     }.
 
-increment_generation(#st{header = Header}, Gen) ->
-    MaxGen = couch_bt_engine_header:max_generation(Header),
-    case {MaxGen, Gen} of
-        {0, _} -> {0, 0};
-        {M, M} -> {M + 1, M};
-        {_, G} -> {G + 1, G + 1}
-    end.
-
 pick_target_generation(SrcGen, DstGen, DataGen) ->
     case DataGen of
         SrcGen -> DstGen;
@@ -430,7 +422,7 @@ copy_docs(St, SrcGen, #st{} = NewSt, MixedInfos, Retry) ->
                 fun
                     ({RevPos, RevId}, #leaf{ptr = LeafPtr} = Leaf, leaf, SizesAcc) ->
                         {DocGen, _} = couch_db_updater:generation_pointer(LeafPtr),
-                        DstGen = increment_generation(St, SrcGen),
+                        DstGen = couch_bt_engine:increment_generation(St, SrcGen),
                         {Body, AttsChanged, AttInfos} = copy_doc_attachments(
                             St, NewSt, LeafPtr, SrcGen, DstGen
                         ),
