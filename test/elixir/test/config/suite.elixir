@@ -295,6 +295,10 @@
     "lots of docs with _all_docs",
     "lots of docs with a regular view"
   ],
+  "MangoTest": [
+    "Mango Smoke Test",
+    "Mango Basic Find: bad selector"
+  ],
   "MethodOverrideTest": [
     "Method Override is ignored when original Method isn't POST",
     "method override DELETE",
