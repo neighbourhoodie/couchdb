@@ -36,6 +36,9 @@
   "ElemMatchTests": [
     "elem match non object"
   ],
+  "AllMatchTests": [
+    "test_all_match"
+  ],
   "LimitTests": [
     "limit field"
   ]

@@ -31,3 +31,48 @@ defmodule ElemMatchTests do
     assert Enum.at(docs, 0)["results"] == [82, 85, 88]
   end
 end
+
+defmodule AllMatchTests do
+  use CouchTestCase
+
+  @db_name "basic-text-elem-match"
+
+  setup do
+    FriendDocs.setup(@db_name, "text")
+  end
+
+  test "test_all_match" do
+    q = %{"friends" => %{"$allMatch" => %{"type" => "personal"}}}
+    docs = MangoDatabase.find(@db_name, q)
+    assert length(docs) == 2
+    user_ids = Enum.map(docs, fn doc -> doc["user_id"] end)
+    # TODO The returned order is not correct
+    # assert user_ids == [8, 5]
+
+    # Check that we can do logic in allMatch
+    q = %{
+      "friends" => %{
+        "$allMatch" => %{
+          "name.first" => "Ochoa",
+          "$or" => [%{"type" => "work"}, %{"type" => "personal"}],
+        }
+      }
+    }
+    docs = MangoDatabase.find(@db_name, q)
+    assert length(docs) == 1
+    assert Enum.at(docs, 0)["user_id"] == 15
+
+    # Same as last, but using $in
+    q = %{
+      "friends" => %{
+        "$allMatch" => %{
+          "name.first" => "Ochoa",
+          "type" => %{"$in" => ["work", "personal"]},
+        }
+      }
+    }
+    docs = MangoDatabase.find(@db_name, q)
+    assert length(docs) == 1
+    assert Enum.at(docs, 0)["user_id"] == 15
+  end
+end
