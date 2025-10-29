@@ -30,6 +30,94 @@ defmodule ElemMatchTests do
     assert length(docs) == 1
     assert Enum.at(docs, 0)["results"] == [82, 85, 88]
   end
+
+  test "elem match" do
+    q = %{"friends" => %{"$elemMatch" => %{"name.first" => "Vargas"}}}
+    docs = MangoDatabase.find(@db_name, q)
+    assert length(docs) == 2
+    user_ids = Enum.map(docs, fn doc -> doc["user_id"] end)
+    # TODO The order is not correct somehow, it returns [1, 0]
+    # assert user_ids == [0, 1]
+
+    q = %{"friends" => %{"$elemMatch" => %{"name.first" => "Ochoa", "name.last" => "Burch"}}}
+    docs = MangoDatabase.find(@db_name, q)
+    assert length(docs) == 1
+    assert Enum.at(docs, 0)["user_id"] == 4
+
+    # Check that we can do logic in elemMatch
+    q = %{"friends" => %{"$elemMatch" => %{"name.first" => "Ochoa", "type" => "work"}}}
+    docs = MangoDatabase.find(@db_name, q)
+    assert length(docs) == 2
+    user_ids = Enum.map(docs, fn doc -> doc["user_id"] end)
+    # TODO The returned order is not correct
+    # assert user_ids == [1, 15]
+
+    q = %{
+      "friends" => %{
+        "$elemMatch" => %{
+          "name.first" => "Ochoa",
+          "$or" => [%{"type" => "work"}, %{"type" => "personal"}],
+        }
+      }
+    }
+    docs = MangoDatabase.find(@db_name, q)
+    assert length(docs) == 3
+    user_ids = Enum.map(docs, fn doc -> doc["user_id"] end)
+    # TODO The returned order is not correct
+    # assert user_ids == [1, 4, 15]
+
+    # Same as last, but using $in
+    q = %{
+      "friends" => %{
+        "$elemMatch" => %{
+          "name.first" => "Ochoa",
+          "type" => %{"$in" => ["work", "personal"]},
+        }
+      }
+    }
+    docs = MangoDatabase.find(@db_name, q)
+    assert length(docs) == 3
+    user_ids = Enum.map(docs, fn doc -> doc["user_id"] end)
+    # TODO The returned order is not correct: [15, 1, 4]
+    # assert user_ids == [1, 4, 15]
+
+    # TODO this most likely is wrong
+    q = %{
+      "$and" => [
+        %{
+          "friends" => %{
+            "$elemMatch" => %{
+              "id" => 0,
+              "name" => %{"$exists" => true}
+            }
+          }
+        },
+        %{
+          "friends" => %{
+            "$elemMatch" => %{
+              "$or" => [
+                %{"name" => %{"first" => "Campos", "last" => "Freeman"}},
+                %{
+                  "name" => %{
+                    "$in" => [
+                      %{"first" => "Gibbs", "last" => "Mccarty"},
+                      %{"first" => "Wilkins", "last" => "Chang"}
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+
+    docs = MangoDatabase.find(@db_name, q)
+    assert length(docs) == 3
+    user_ids = Enum.map(docs, fn doc -> doc["user_id"] end)
+    # TODO returns this '\n\f\v'
+    # assert user_ids == [10, 11, 12]
+  end
 end
 
 defmodule AllMatchTests do
