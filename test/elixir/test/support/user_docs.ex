@@ -360,6 +360,8 @@ defmodule UserDocs do
       "text" -> add_text_indexes(db)
       "special" -> :ok
     end
+
+    :ok
   end
 
   def len() do
