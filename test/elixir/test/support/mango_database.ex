@@ -11,6 +11,13 @@
 # the License.
 
 defmodule MangoDatabase do
+  defp put_unless_nil(map, key, value) do
+    case value do
+      nil -> map
+      val -> Map.put(map, key, val)
+    end
+  end
+
   def has_text_service() do
     resp = Couch.get("/")
     "search" in resp.body["features"]
@@ -63,7 +70,7 @@ defmodule MangoDatabase do
 
   # TODO: port more options from src/mango/test/mango.py `def find(...)`
   def find(db, selector, opts \\ []) do
-    defaults = [use_index: nil, skip: 0, limit: 25, r: 1, conflicts: false, sort: []]
+    defaults = [use_index: nil, skip: 0, limit: 25, r: 1, conflicts: false]
     options = Keyword.merge(defaults, opts)
 
     resp = Couch.post("/#{db}/_find", body: %{
@@ -72,9 +79,9 @@ defmodule MangoDatabase do
       "skip" => options[:skip],
       "limit" => options[:limit],
       "r" => options[:r],
-      "conflicts" => options[:conflicts],
-      "sort" => options[:sort]
-    })
+      "conflicts" => options[:conflicts]
+    }
+    |> put_unless_nil("sort", options[:sort]))
 
     case resp.status_code do
       200 -> {:ok, resp.body["docs"]}

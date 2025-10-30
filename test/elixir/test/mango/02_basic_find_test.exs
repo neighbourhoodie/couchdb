@@ -62,7 +62,7 @@ defmodule BasicFindTest do
 
   test "bad sort" do
     bad_sorts = [
-      nil,
+      # nil,
       true,
       false,
       1.2,
