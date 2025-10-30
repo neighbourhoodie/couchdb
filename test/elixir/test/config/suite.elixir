@@ -731,5 +731,24 @@
   ],
   "BasicFindTest": [
     "simple find"
+  ],
+  "BasicTextTests": [
+    "test_simple",
+    "test_with_integer",
+    "test_with_boolean",
+    "test_with_array",
+    "test_array_ref",
+    "test_number_ref",
+    "test_lt",
+    "test_lte",
+    "test_eq",
+    "test_ne",
+    "test_gt",
+    "test_gte",
+    "test_and",
+    "test_or",
+    "test_and_or",
+    "test_nor",
+    "test_in_with_value",
   ]
 }

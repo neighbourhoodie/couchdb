@@ -361,6 +361,10 @@ defmodule UserDocs do
     end
   end
 
+  def get_docs_length() do
+    length(@docs)
+  end
+
   defp add_view_indexes(db) do
     indexes = [
       {["user_id"], "user_id"},
