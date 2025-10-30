@@ -34,10 +34,8 @@ defmodule ElemMatchTests do
   test "elem match" do
     q = %{"friends" => %{"$elemMatch" => %{"name.first" => "Vargas"}}}
     docs = MangoDatabase.find(@db_name, q)
-    assert length(docs) == 2
     user_ids = Enum.map(docs, fn doc -> doc["user_id"] end)
-    # TODO The order is not correct somehow, it returns [1, 0]
-    # assert user_ids == [0, 1]
+    assert Enum.sort(user_ids) == [0, 1]
 
     q = %{"friends" => %{"$elemMatch" => %{"name.first" => "Ochoa", "name.last" => "Burch"}}}
     docs = MangoDatabase.find(@db_name, q)
@@ -47,10 +45,8 @@ defmodule ElemMatchTests do
     # Check that we can do logic in elemMatch
     q = %{"friends" => %{"$elemMatch" => %{"name.first" => "Ochoa", "type" => "work"}}}
     docs = MangoDatabase.find(@db_name, q)
-    assert length(docs) == 2
     user_ids = Enum.map(docs, fn doc -> doc["user_id"] end)
-    # TODO The returned order is not correct
-    # assert user_ids == [1, 15]
+    assert Enum.sort(user_ids) == [1, 15]
 
     q = %{
       "friends" => %{
@@ -61,10 +57,8 @@ defmodule ElemMatchTests do
       }
     }
     docs = MangoDatabase.find(@db_name, q)
-    assert length(docs) == 3
     user_ids = Enum.map(docs, fn doc -> doc["user_id"] end)
-    # TODO The returned order is not correct
-    # assert user_ids == [1, 4, 15]
+    assert Enum.sort(user_ids) == [1, 4, 15]
 
     # Same as last, but using $in
     q = %{
@@ -76,12 +70,9 @@ defmodule ElemMatchTests do
       }
     }
     docs = MangoDatabase.find(@db_name, q)
-    assert length(docs) == 3
     user_ids = Enum.map(docs, fn doc -> doc["user_id"] end)
-    # TODO The returned order is not correct: [15, 1, 4]
-    # assert user_ids == [1, 4, 15]
+    assert Enum.sort(user_ids) == [1, 4, 15]
 
-    # TODO this most likely is wrong
     q = %{
       "$and" => [
         %{
@@ -113,10 +104,8 @@ defmodule ElemMatchTests do
     }
 
     docs = MangoDatabase.find(@db_name, q)
-    assert length(docs) == 3
     user_ids = Enum.map(docs, fn doc -> doc["user_id"] end)
-    # TODO returns this '\n\f\v'
-    # assert user_ids == [10, 11, 12]
+    assert Enum.sort(user_ids) == [10, 11, 12]
   end
 end
 
@@ -132,10 +121,8 @@ defmodule AllMatchTests do
   test "test_all_match" do
     q = %{"friends" => %{"$allMatch" => %{"type" => "personal"}}}
     docs = MangoDatabase.find(@db_name, q)
-    assert length(docs) == 2
     user_ids = Enum.map(docs, fn doc -> doc["user_id"] end)
-    # TODO The returned order is not correct
-    # assert user_ids == [8, 5]
+    assert Enum.sort(user_ids) == [5, 8]
 
     # Check that we can do logic in allMatch
     q = %{
