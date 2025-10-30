@@ -63,7 +63,7 @@ defmodule MangoDatabase do
 
   # TODO: port more options from src/mango/test/mango.py `def find(...)`
   def find(db, selector, opts \\ []) do
-    defaults = [use_index: nil, skip: 0, limit: 25, r: 1, conflicts: false]
+    defaults = [use_index: nil, skip: 0, limit: 25, r: 1, conflicts: false, sort: []]
     options = Keyword.merge(defaults, opts)
 
     resp = Couch.post("/#{db}/_find", body: %{
@@ -72,7 +72,8 @@ defmodule MangoDatabase do
       "skip" => options[:skip],
       "limit" => options[:limit],
       "r" => options[:r],
-      "conflicts" => options[:conflicts]
+      "conflicts" => options[:conflicts],
+      "sort" => options[:sort]
     })
 
     case resp.status_code do

@@ -60,4 +60,22 @@ defmodule BasicFindTest do
     end)
   end
 
+  test "bad sort" do
+    bad_sorts = [
+      nil,
+      true,
+      false,
+      1.2,
+      "no limit!",
+      %{"foo" => "bar"},
+      [2],
+      [%{"foo" => "asc", "bar" => "asc"}],
+      [%{"foo" => "asc"}, %{"bar" => "desc"}]
+    ]
+    Enum.each(bad_sorts, fn bs ->
+      {:error, resp} = MangoDatabase.find(@db_name, %{"int" => %{"$gt" => 2}}, sort: bs)
+      assert resp.status_code == 400
+    end)
+  end
+
 end

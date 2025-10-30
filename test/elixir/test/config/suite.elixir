@@ -733,6 +733,7 @@
     "simple find",
     "bad selector",
     "bad limit",
-    "bad skip"
+    "bad skip",
+    "bad sort"
   ]
 }
