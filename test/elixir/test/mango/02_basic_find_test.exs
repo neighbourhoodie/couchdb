@@ -26,6 +26,24 @@ defmodule BasicFindTest do
     assert user_ids == [9, 1, 7]
   end
 
+  test "bad selector" do
+    bad_selectors = [
+      nil,
+      true,
+      false,
+      1.0,
+      "foobarbaz",
+      %{"foo" => %{"$not_an_op" => 2}},
+      %{"$gt" => 2},
+      [nil, "bing"],
+      %{"_id" => %{"" => None}},
+    ]
+    Enum.each(bad_selectors, fn bs ->
+      {:error, resp} = MangoDatabase.find(@db_name, bs)
+      assert resp.status_code == 400
+    end)
+  end
+
   test "bad limit" do
     bad_limits = [nil, true, false, -1, 1.2, "no limit!", %{"foo" => "bar"}, [2]]
     Enum.each(bad_limits, fn bl ->
