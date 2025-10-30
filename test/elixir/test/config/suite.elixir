@@ -732,6 +732,7 @@
   "BasicFindTest": [
     "simple find",
     "bad selector",
-    "bad limit"
+    "bad limit",
+    "bad skip"
   ]
 }

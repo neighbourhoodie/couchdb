@@ -52,4 +52,12 @@ defmodule BasicFindTest do
     end)
   end
 
+  test "bad skip" do
+    bad_skips = [nil, true, false, -3, 1.2, "no limit!", %{"foo" => "bar"}, [2]]
+    Enum.each(bad_skips, fn bs ->
+      {:error, resp} = MangoDatabase.find(@db_name, %{"int" => %{"$gt" => 2}}, skip: bs)
+      assert resp.status_code == 400
+    end)
+  end
+
 end
