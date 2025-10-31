@@ -741,6 +741,7 @@
     "multi cond and",
     "multi cond duplicate field",
     "multi cond or",
-    "multi col idx"
+    "multi col idx",
+    "missing not indexed"
   ]
 }

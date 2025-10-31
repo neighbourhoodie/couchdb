@@ -159,4 +159,17 @@ defmodule BasicFindTest do
     assert user_id == [6]
   end
 
+  test "missing not indexed" do
+    {:ok, docs} = MangoDatabase.find(@db_name, %{"favorites.3" => "C"})
+    user_id = Enum.map(docs, fn doc -> doc["user_id"] end)
+    assert user_id == [6]
+
+    {:ok, docs} = MangoDatabase.find(@db_name, %{"favorites.3" => nil})
+    assert length(docs) == 0
+
+    {:ok, docs} = MangoDatabase.find(@db_name, %{"twitter" => %{"$ne" => nil}})
+    user_id = Enum.map(docs, fn doc -> doc["user_id"] end)
+    assert user_id == [1, 4, 0, 13]
+  end
+
 end
