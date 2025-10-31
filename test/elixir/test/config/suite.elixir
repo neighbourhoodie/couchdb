@@ -735,6 +735,7 @@
     "bad limit",
     "bad skip",
     "bad sort",
-    "bad fields"
+    "bad fields",
+    "bad r"
   ]
 }
