@@ -135,4 +135,19 @@ defmodule BasicFindTest do
     assert length(docs) == 15
   end
 
+  test "multi cond or" do
+    {:ok, docs} = MangoDatabase.find(
+      @db_name,
+      %{
+        "$and" => [
+          %{"age" => %{"$gte" => 75}},
+          %{"$or" => [%{"name.first" => "Mathis"}, %{"name.first" => "Whitley"}]},
+        ]
+      }
+    )
+
+    user_id = Enum.map(docs, fn doc -> doc["user_id"] end)
+    assert user_id == [11, 13]
+  end
+
 end
