@@ -34,7 +34,11 @@
     "facet ranges, non-empty"
   ],
   "ElemMatchTests": [
-    "elem match non object"
+    "elem match non object",
+    "elem match"
+  ],
+  "AllMatchTests": [
+    "test_all_match"
   ],
   "LimitTests": [
     "limit field"

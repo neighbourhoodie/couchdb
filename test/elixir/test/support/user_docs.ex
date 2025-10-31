@@ -359,6 +359,12 @@ defmodule UserDocs do
       "view" -> add_view_indexes(db)
       "text" -> add_text_indexes(db)
     end
+
+    :ok
+  end
+
+  def get_docs_length() do
+    length(@docs)
   end
 
   defp add_view_indexes(db) do
