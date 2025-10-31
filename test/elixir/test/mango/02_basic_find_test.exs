@@ -116,4 +116,11 @@ defmodule BasicFindTest do
     end)
   end
 
+  test "multi cond and" do
+    {:ok, docs} = MangoDatabase.find(@db_name, %{"manager" => true, "location.city" => "Longbranch"})
+
+    user_id = Enum.map(docs, fn doc -> doc["user_id"] end)
+    assert user_id == [7]
+  end
+
 end

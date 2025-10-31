@@ -737,6 +737,7 @@
     "bad sort",
     "bad fields",
     "bad r",
-    "bad conflicts"
+    "bad conflicts",
+    "multi cond and"
   ]
 }
