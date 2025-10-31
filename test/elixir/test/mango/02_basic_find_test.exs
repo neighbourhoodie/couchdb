@@ -108,4 +108,12 @@ defmodule BasicFindTest do
     end)
   end
 
+  test "bad conflicts" do
+    bad_conflicts = [nil, 1.2, "no limit!", %{"foo" => "bar"}, [2]]
+    Enum.each(bad_conflicts, fn bc ->
+      {:error, resp} = MangoDatabase.find(@db_name, %{"int" => %{"$gt" => 2}}, conflicts: bc)
+      assert resp.status_code == 400
+    end)
+  end
+
 end
