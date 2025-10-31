@@ -150,4 +150,17 @@ defmodule BasicFindTest do
     assert user_id == [11, 13]
   end
 
+  test "multi col idx" do
+    {:ok, docs} = MangoDatabase.find(
+      @db_name,
+        %{
+          "location.state" => %{"$and" => [%{"$gt" => "Hawaii"}, %{"$lt" => "Maine"}]},
+          "location.city" => %{"$lt" => "Longbranch"},
+        }
+    )
+
+    user_id = Enum.map(docs, fn doc -> doc["user_id"] end)
+    assert user_id == [6]
+  end
+
 end
