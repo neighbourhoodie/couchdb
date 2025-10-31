@@ -11,10 +11,11 @@
 # the License.
 
 defmodule MangoDatabase do
-  defp put_unless_nil(map, key, value) do
-    case value do
-      nil -> map
-      val -> Map.put(map, key, val)
+  defp put_unless_empty(map, key, opts, opts_key) do
+    if Keyword.has_key?(opts, opts_key) do
+      Map.put(map, key, opts[opts_key])
+    else
+      map
     end
   end
 
@@ -81,8 +82,8 @@ defmodule MangoDatabase do
       "r" => options[:r],
       "conflicts" => options[:conflicts]
     }
-    |> put_unless_nil("sort", options[:sort])
-    |> put_unless_nil("fields", options[:fields]))
+    |> put_unless_empty("sort", opts, :sort)
+    |> put_unless_empty("fields", opts, :fields))
 
     case resp.status_code do
       200 -> {:ok, resp.body["docs"]}

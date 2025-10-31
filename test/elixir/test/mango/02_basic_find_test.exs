@@ -60,11 +60,9 @@ defmodule BasicFindTest do
     end)
   end
 
-  # TODO: put_unless_nil function in the mango_database.ex file does not account for 'nil'.
-  # need to include 'nil' in the test
   test "bad sort" do
     bad_sorts = [
-      # nil,
+      nil,
       true,
       false,
       1.2,
@@ -80,11 +78,9 @@ defmodule BasicFindTest do
     end)
   end
 
-  # TODO: put_unless_nil function in the mango_database.ex file does not account for 'nil'.
-  # need to include 'nil' in the test
   test "bad fields" do
     bad_fields = [
-      # nil,
+      nil,
       true,
       false,
       1.2,
