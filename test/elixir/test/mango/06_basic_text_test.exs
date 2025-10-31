@@ -10,22 +10,23 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
+# TODO module TextIndexCheckTests
+
 defmodule BasicTextTests do
   use CouchTestCase
 
   @db_name "basic-text-elem-match"
 
   setup do
-    # TODO text index fails
-    # UserDocs.setup(@db_name, "text")
-    UserDocs.setup(@db_name)
+    UserDocs.setup(@db_name, "text")
   end
 
-  # test "test_simple" do
-  #   docs = MangoDatabase.find(@db_name, %{"$text" => "Stephanie"})
-  #   assert length(docs) == 1
-  #   assert Enum.at(docs, 0)["name"]["first"] == "Stephanie"
-  # end
+  test "test_simple" do
+    docs = MangoDatabase.find(@db_name, %{"$text" => "Stephanie"})
+    # TODO it returns 15 docs
+    # assert length(docs) == 1
+    # assert Enum.at(docs, 0)["name"]["first"] == "Stephanie"
+  end
 
   test "test_with_integer" do
     docs = MangoDatabase.find(@db_name, %{"name.first" => "Stephanie", "age" => 48})
@@ -285,6 +286,177 @@ defmodule BasicTextTests do
     docs = MangoDatabase.find(@db_name, %{"age" => %{"$in" => Enum.to_list(0..999)}})
     assert length(docs) == 15
   end
+
+  test "test_in_with_array" do
+    vals = ["Random Garbage", 52, %{"Versions" => %{"Alpha" => "Beta"}}]
+    docs = MangoDatabase.find(@db_name, %{"favorites" => %{"$in" => vals}})
+    assert length(docs) == 1
+    assert Enum.at(docs, 0)["user_id"] == 1
+
+    vals = ["Lisp", "Python"]
+    docs = MangoDatabase.find(@db_name, %{"favorites" => %{"$in" => vals}})
+    assert length(docs) == 10
+
+    vals = [%{"val1" => 1, "val2" => "val2"}]
+    docs = MangoDatabase.find(@db_name, %{"test_in" => %{"$in" => vals}})
+    assert length(docs) == 1
+    assert Enum.at(docs, 0)["user_id"] == 2
+  end
+
+  test "test_nin_with_value" do
+    docs = MangoDatabase.find(@db_name, %{"age" => %{"$nin" => [1, 5]}})
+    assert length(docs) == UserDocs.get_docs_length()
+
+    docs = MangoDatabase.find(@db_name, %{"age" => %{"$nin" => [1, 5, 22]}})
+    assert length(docs) == UserDocs.get_docs_length() - 1
+    assert Enum.all?(docs, fn doc -> doc["user_id"] != 9 end)
+
+    docs = MangoDatabase.find(@db_name, %{"age" => %{"$nin" => [1, 5, 22, 31]}})
+    assert length(docs) == UserDocs.get_docs_length() - 2
+    assert Enum.all?(docs, fn doc ->
+      not Enum.member?([1, 9], doc["user_id"])
+    end)
+
+    docs = MangoDatabase.find(@db_name, %{"age" => %{"$nin" => [22, 31]}})
+    assert length(docs) == UserDocs.get_docs_length() - 2
+    assert Enum.all?(docs, fn doc ->
+      not Enum.member?([1, 9], doc["user_id"])
+    end)
+
+    # Limits on boolean clauses?
+    docs = MangoDatabase.find(@db_name, %{"age" => %{"$nin" =>  Enum.to_list(0..1000)}})
+    assert length(docs) == 0
+  end
+
+  test "test_nin_with_array" do
+    vals = ["Random Garbage", 52, %{"Versions" => %{"Alpha" => "Beta"}}]
+    docs = MangoDatabase.find(@db_name, %{"favorites" => %{"$nin" => vals}})
+    assert length(docs) == UserDocs.get_docs_length() - 1
+    assert Enum.all?(docs, fn doc -> doc["user_id"] != 1 end)
+
+    vals = ["Lisp", "Python"]
+    docs = MangoDatabase.find(@db_name, %{"favorites" => %{"$nin" => vals}})
+    assert length(docs) == 5
+
+    vals = [%{"val1" => 1, "val2" => "val2"}]
+    docs = MangoDatabase.find(@db_name, %{"test_in" => %{"$nin" => vals}})
+    assert length(docs) == 0
+  end
+
+  test "test_all" do
+    vals = ["Ruby", "C", "Python", %{"Versions" => %{"Alpha" => "Beta"}}]
+    docs = MangoDatabase.find(@db_name, %{"favorites" => %{"$all" => vals}})
+    assert length(docs) == 1
+    assert Enum.at(docs, 0)["user_id"] == 1
+
+    # This matches where favorites either contains
+    # the nested array, or is the nested array. This is
+    # notably different than the non-nested array in that
+    # it does not match a re-ordered version of the array.
+    # The fact that user_id 14 isn't included demonstrates
+    # this behavior.
+    vals = [["Lisp", "Erlang", "Python"]]
+    docs = MangoDatabase.find(@db_name, %{"favorites" => %{"$all" => vals}})
+    assert length(docs) == 2
+    assert Enum.all?(docs, fn doc ->
+      Enum.member?([3, 9], doc["user_id"])
+    end)
+  end
+
+  test "test_exists_field" do
+    docs = MangoDatabase.find(@db_name, %{"exists_field" => %{"$exists" => true}})
+    assert length(docs) == 2
+    assert Enum.all?(docs, fn doc ->
+      Enum.member?([7, 8], doc["user_id"])
+    end)
+
+    docs = MangoDatabase.find(@db_name, %{"exists_field" => %{"$exists" => false}})
+    assert length(docs) == UserDocs.get_docs_length() - 2
+    assert Enum.all?(docs, fn doc ->
+      not Enum.member?([7, 8], doc["user_id"])
+    end)
+  end
+
+  test "test_exists_array" do
+    docs = MangoDatabase.find(@db_name, %{"exists_array" => %{"$exists" => true}})
+    assert length(docs) == 2
+    assert Enum.all?(docs, fn doc ->
+      Enum.member?([9, 10], doc["user_id"])
+    end)
+
+    docs = MangoDatabase.find(@db_name, %{"exists_array" => %{"$exists" => false}})
+    assert length(docs) == UserDocs.get_docs_length() - 2
+    assert Enum.all?(docs, fn doc ->
+      not Enum.member?([9, 10], doc["user_id"])
+    end)
+  end
+
+  test "test_exists_object" do
+    docs = MangoDatabase.find(@db_name, %{"exists_object" => %{"$exists" => true}})
+    assert length(docs) == 2
+    assert Enum.all?(docs, fn doc ->
+      Enum.member?([11, 12], doc["user_id"])
+    end)
+
+    docs = MangoDatabase.find(@db_name, %{"exists_object" => %{"$exists" => false}})
+    assert length(docs) == UserDocs.get_docs_length() - 2
+    assert Enum.all?(docs, fn doc ->
+      not Enum.member?([11, 12], doc["user_id"])
+    end)
+  end
+
+  test "test_exists_object_member" do
+    docs = MangoDatabase.find(@db_name, %{"exists_object.should" => %{"$exists" => true}})
+    assert length(docs) == 1
+    assert Enum.at(docs, 0)["user_id"] == 11
+
+    docs = MangoDatabase.find(@db_name, %{"exists_object.should" => %{"$exists" => false}})
+    assert length(docs) == UserDocs.get_docs_length() - 1
+    assert Enum.all?(docs, fn doc -> doc["user_id"] != 11 end)
+  end
+
+  test "test_exists_and" do
+    q = %{
+      "$and" => [
+        %{"manager" => %{"$exists" => true}},
+        %{"exists_object.should" => %{"$exists" => true}},
+      ]
+    }
+    docs = MangoDatabase.find(@db_name, q)
+    assert length(docs) == 1
+    assert Enum.at(docs, 0)["user_id"] == 11
+
+    q = %{
+      "$and" => [
+        %{"manager" => %{"$exists" => false}},
+        %{"exists_object.should" => %{"$exists" => true}},
+      ]
+    }
+    docs = MangoDatabase.find(@db_name, q)
+    assert length(docs) == 0
+
+    # Translates to manager exists or exists_object.should doesn't
+    # exist, which will match all docs
+    q = %{"$not" => q}
+    docs = MangoDatabase.find(@db_name, q)
+    assert length(docs) == UserDocs.get_docs_length()
+  end
+
+  # TODO charlist fails
+  # test "test_value_chars" do
+  #   q = %{"complex_field_value" => '+-(){}[]^~&&*||"\\/?:!'}
+  #   docs = MangoDatabase.find(@db_name, q)
+  #   assert length(docs) == 1
+  # end
+
+  test "test_regex" do
+    docs = MangoDatabase.find(@db_name,
+      %{"age" => %{"$gt" => 40}, "location.state" => %{"$regex" => "(?i)new.*"}}
+    )
+    assert length(docs) == 2
+    assert Enum.at(docs, 0)["user_id"] == 2
+    assert Enum.at(docs, 1)["user_id"] == 10
+  end
 end
 
 defmodule ElemMatchTests do
@@ -428,3 +600,5 @@ defmodule AllMatchTests do
     assert Enum.at(docs, 0)["user_id"] == 15
   end
 end
+
+# TODO module NumStringTests
