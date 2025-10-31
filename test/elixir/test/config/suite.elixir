@@ -738,6 +738,7 @@
     "bad fields",
     "bad r",
     "bad conflicts",
-    "multi cond and"
+    "multi cond and",
+    "multi cond duplicate field"
   ]
 }

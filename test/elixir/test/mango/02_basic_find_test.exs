@@ -123,4 +123,16 @@ defmodule BasicFindTest do
     assert user_id == [7]
   end
 
+  test "multi cond duplicate field" do
+    # need to explicitly define JSON as dict won't allow duplicate keys
+    body = %{
+      "location.city" => %{"$regex" => "^L+"},
+      "location.city" => %{"$exists" => true}
+    }
+    {:ok, docs} = MangoDatabase.find(@db_name, body)
+    # expectation is that only the second instance
+    # of the "location.city" field is used
+    assert length(docs) == 15
+  end
+
 end
