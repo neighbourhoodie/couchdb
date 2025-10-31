@@ -11,6 +11,14 @@
 # the License.
 
 defmodule MangoDatabase do
+  defp put_unless_empty(map, key, opts, opts_key) do
+    if Keyword.has_key?(opts, opts_key) do
+      Map.put(map, key, opts[opts_key])
+    else
+      map
+    end
+  end
+
   def has_text_service() do
     resp = Couch.get("/")
     "search" in resp.body["features"]
@@ -73,7 +81,9 @@ defmodule MangoDatabase do
       "limit" => options[:limit],
       "r" => options[:r],
       "conflicts" => options[:conflicts]
-    })
+    }
+    |> put_unless_empty("sort", opts, :sort)
+    |> put_unless_empty("fields", opts, :fields))
 
     case resp.status_code do
       200 -> {:ok, resp.body["docs"]}
