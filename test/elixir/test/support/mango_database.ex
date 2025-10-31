@@ -81,7 +81,8 @@ defmodule MangoDatabase do
       "r" => options[:r],
       "conflicts" => options[:conflicts]
     }
-    |> put_unless_nil("sort", options[:sort]))
+    |> put_unless_nil("sort", options[:sort])
+    |> put_unless_nil("fields", options[:fields]))
 
     case resp.status_code do
       200 -> {:ok, resp.body["docs"]}

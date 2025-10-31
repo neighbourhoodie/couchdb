@@ -60,6 +60,8 @@ defmodule BasicFindTest do
     end)
   end
 
+  # TODO: put_unless_nil function in the mango_database.ex file does not account for 'nil'.
+  # need to include 'nil' in the test
   test "bad sort" do
     bad_sorts = [
       # nil,
@@ -74,6 +76,26 @@ defmodule BasicFindTest do
     ]
     Enum.each(bad_sorts, fn bs ->
       {:error, resp} = MangoDatabase.find(@db_name, %{"int" => %{"$gt" => 2}}, sort: bs)
+      assert resp.status_code == 400
+    end)
+  end
+
+  # TODO: put_unless_nil function in the mango_database.ex file does not account for 'nil'.
+  # need to include 'nil' in the test
+  test "bad fields" do
+    bad_fields = [
+      # nil,
+      true,
+      false,
+      1.2,
+      "no limit!",
+      %{"foo" => "bar"},
+      [2],
+      [[]],
+      ["foo", 2.0],
+    ]
+    Enum.each(bad_fields, fn bf ->
+      {:error, resp} = MangoDatabase.find(@db_name, %{"int" => %{"$gt" => 2}}, fields: bf)
       assert resp.status_code == 400
     end)
   end

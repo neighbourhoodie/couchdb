@@ -734,6 +734,7 @@
     "bad selector",
     "bad limit",
     "bad skip",
-    "bad sort"
+    "bad sort",
+    "bad fields"
   ]
 }
