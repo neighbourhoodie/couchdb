@@ -395,6 +395,9 @@ defmodule UserDocs do
   end
 
   defp add_text_indexes(db) do
-    MangoDatabase.create_text_index(db)
+    text_indexes = [
+      %{"name" => "name.first", "type" => "text"}
+    ]
+    MangoDatabase.create_text_index(db, text_indexes, "text_index")
   end
 end
