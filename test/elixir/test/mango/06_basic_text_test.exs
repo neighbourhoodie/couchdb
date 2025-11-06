@@ -19,6 +19,14 @@ defmodule BasicTextTests do
 
   setup do
     UserDocs.setup(@db_name, "text")
+
+    if MangoDatabase.has_text_service() do
+      IO.inspect('closeao is setup')
+      MangoDatabase.create_text_index(@db_name)
+      :ok
+    else
+      {:ok, skip: true}
+    end
   end
 
   test "test_simple" do
