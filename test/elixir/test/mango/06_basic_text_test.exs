@@ -19,21 +19,13 @@ defmodule BasicTextTests do
 
   setup do
     UserDocs.setup(@db_name, "text")
-
-    if MangoDatabase.has_text_service() do
-      IO.inspect('closeao is setup')
-      MangoDatabase.create_text_index(@db_name)
-      :ok
-    else
-      {:ok, skip: true}
-    end
   end
 
   test "test_simple" do
     {:ok, docs} = MangoDatabase.find(@db_name, %{"$text" => "Stephanie"})
-    # TODO it returns 15 docs
-    # assert length(docs) == 1
-    # assert Enum.at(docs, 0)["name"]["first"] == "Stephanie"
+
+    assert length(docs) == 1
+    assert Enum.at(docs, 0)["name"]["first"] == "Stephanie"
   end
 
   test "test_with_integer" do
@@ -225,9 +217,8 @@ defmodule BasicTextTests do
     assert Enum.at(docs, 0)["user_id"] == 9
 
     {:ok, docs} = MangoDatabase.find(@db_name, %{"$and" => [%{"$text" => "Ramona"}, %{"$text" => "Floyd"}]})
-    # TODO FIX
-    # assert length(docs) == 1
-    # assert Enum.at(docs, 0)["user_id"] == 9
+    assert length(docs) == 1
+    assert Enum.at(docs, 0)["user_id"] == 9
   end
 
   test "test_or" do
@@ -238,14 +229,12 @@ defmodule BasicTextTests do
     q = %{"$or" => [%{"$text" => "Ramona"}, %{"$text" => "Stephanie"}]}
     {:ok, docs} = MangoDatabase.find(@db_name, q)
     user_ids = Enum.map(docs, fn doc -> doc["user_id"] end)
-    # TODO returns 9 files
-    # assert Enum.sort(user_ids) == [0, 9]
+    assert Enum.sort(user_ids) == [0, 9]
 
     q = %{"$or" => [%{"$text" => "Ramona"}, %{"age" => 22}]}
     {:ok, docs} = MangoDatabase.find(@db_name, q)
-    # TODO fails returns 15 files
-    # assert length(docs) == 1
-    # assert Enum.at(docs, 0)["user_id"] == 9
+    assert length(docs) == 1
+    assert Enum.at(docs, 0)["user_id"] == 9
   end
 
   test "test_and_or" do
@@ -261,9 +250,8 @@ defmodule BasicTextTests do
 
     q = %{"$or" => [%{"$text" => "Ramona"}, %{"age" => 43, "manager" => true}]}
     {:ok, docs} = MangoDatabase.find(@db_name, q)
-    # TODO fails returns 15 files
-    # user_ids = Enum.map(docs, fn doc -> doc["user_id"] end)
-    # assert Enum.sort(user_ids) == [9, 10]
+    user_ids = Enum.map(docs, fn doc -> doc["user_id"] end)
+    assert Enum.sort(user_ids) == [9, 10]
   end
 
   test "test_nor" do
@@ -450,12 +438,12 @@ defmodule BasicTextTests do
     assert length(docs) == UserDocs.get_docs_length()
   end
 
-  # TODO charlist fails
-  # test "test_value_chars" do
-  #   q = %{"complex_field_value" => '+-(){}[]^~&&*||"\\/?:!'}
-  #   {:ok, docs} = MangoDatabase.find(@db_name, q)
-  #   assert length(docs) == 1
-  # end
+  # escape the "
+  test "test_value_chars" do
+    q = %{"complex_field_value" => "+-(){}[]^~&&*||\"\\/?:!"}
+    {:ok, docs} = MangoDatabase.find(@db_name, q)
+    assert length(docs) == 1
+  end
 
   test "test_regex" do
     {:ok, docs} = MangoDatabase.find(@db_name,

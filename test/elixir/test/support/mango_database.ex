@@ -53,9 +53,9 @@ defmodule MangoDatabase do
     })
   end
 
-  def create_text_index(db, fields, name) do
+  def create_text_index(db) do
     Couch.post("/#{db}/_index", body: %{
-      "index" => %{"fields" => fields},
+      "index" => %{},
       "type" => "text",
       "w" => 3
     })

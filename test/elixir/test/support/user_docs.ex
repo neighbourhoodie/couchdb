@@ -217,7 +217,7 @@ defmodule UserDocs do
       "twitter" => nil,
       "favorites" => ["Lisp", "Erlang", "Python"],
       "exists_array" => ["should", "exist", "array1"],
-      "complex_field_value" => '+-()%{}[]^~&&*||"\\/? =>!',
+      "complex_field_value" => "+-(){}[]^~&&*||\"\\/?:!",
       "ordered" => true,
     },
     %{
@@ -395,9 +395,6 @@ defmodule UserDocs do
   end
 
   defp add_text_indexes(db) do
-    text_indexes = [
-      %{"name" => "name.first", "type" => "text"}
-    ]
-    MangoDatabase.create_text_index(db, text_indexes, "text_index")
+    MangoDatabase.create_text_index(db)
   end
 end
