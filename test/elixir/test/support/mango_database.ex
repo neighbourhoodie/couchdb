@@ -73,7 +73,15 @@ defmodule MangoDatabase do
 
   # TODO: port more options from src/mango/test/mango.py `def find(...)`
   def find(db, selector, opts \\ []) do
-    defaults = [use_index: nil, skip: 0, limit: 25, r: 1, conflicts: false, explain: false]
+    defaults = [
+      use_index: nil,
+      skip: 0,
+      limit: 25,
+      r: 1,
+      conflicts: false,
+      explain: false,
+      return_raw: false
+    ]
     options = Keyword.merge(defaults, opts)
 
     path =
@@ -94,7 +102,7 @@ defmodule MangoDatabase do
     |> put_if_set("fields", options, :fields)
     )
 
-    case {options[:explain], resp.status_code} do
+    case {(options[:explain] or options[:return_raw]), resp.status_code} do
       {false, 200} -> {:ok, resp.body["docs"]}
       {true, 200} -> {:ok, resp.body}
       _ -> {:error, resp}
