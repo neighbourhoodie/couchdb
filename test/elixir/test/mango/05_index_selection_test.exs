@@ -284,5 +284,42 @@ defmodule IndexSelectionTest do
       {:error, resp} -> assert resp.status_code == 400
     end
   end
+end
+
+defmodule JSONIndexSelectionTest do
+  use CouchTestCase
+
+  @db_name "json-index-selection"
+
+  setup do
+    UserDocs.setup(@db_name)
+  end
+
+  test "uses all docs when fields do not match selector" do
+    # index exists on ["company", "manager"] but not ["company"]
+    # so we should fall back to all docs (so we include docs
+    # with no "manager" field)
+    selector = %{"company" => "Pharmex"}
+    {:ok, docs} = MangoDatabase.find(@db_name, selector)
+    assert length(docs) == 1
+    assert Enum.at(docs, 0)["company"] == "Pharmex"
+    assert "manager" != Enum.at(docs, 0)
+
+    {:ok, resp_explain} = MangoDatabase.find(@db_name, selector, explain: true)
+    assert resp_explain["index"]["type"] == "special"
+  end
+
+  test "uses all docs when selector doesnt require fields to exist" do
+    # as in test above, use a selector that doesn't overlap with the index
+    # due to an explicit exists clause
+    selector = %{"company" => "Pharmex", "manager" => %{"$exists" => false}}
+    {:ok, docs} = MangoDatabase.find(@db_name, selector)
+    assert length(docs) == 1
+    assert Enum.at(docs, 0)["company"] == "Pharmex"
+    assert "manager" != Enum.at(docs, 0)
+
+    {:ok, resp_explain} = MangoDatabase.find(@db_name, selector, explain: true)
+    assert resp_explain["index"]["type"] == "special"
+  end
 
 end
