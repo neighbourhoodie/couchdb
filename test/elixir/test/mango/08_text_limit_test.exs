@@ -21,7 +21,7 @@ defmodule LimitTests do
 
   test "limit field" do
     q = %{"$or" => [%{"user_id" => %{"$lt" => 10}}, %{"filtered_array.[]" => 1}]}
-    {:ok, docs} = MangoDatabase.find(@db_name, q, limit: 10)
+    {:ok, docs} = MangoDatabase.find(@db_name, q, limit: 10, sort: ["user_id"])
 
     assert length(docs) == 8
     Enum.each(docs, fn d -> assert d["user_id"] < 10 end)
@@ -29,14 +29,14 @@ defmodule LimitTests do
 
   test "limit field 2" do
     q = %{"$or" => [%{"user_id" => %{"$lt" => 20}}, %{"filtered_array.[]" => 1}]}
-    {:ok, docs} = MangoDatabase.find(@db_name, q, limit: 10)
+    {:ok, docs} = MangoDatabase.find(@db_name, q, limit: 10, sort: ["user_id"])
     assert length(docs) == 10
     Enum.each(docs, fn d -> assert d["user_id"] < 20 end)
   end
 
   test "limit field 3" do
     q = %{"$or" => [%{"user_id" => %{"$lt" => 100}}, %{"filtered_array.[]" => 1}]}
-    {:ok, docs} = MangoDatabase.find(@db_name, q, limit: 1)
+    {:ok, docs} = MangoDatabase.find(@db_name, q, limit: 1, sort: ["user_id"])
     assert length(docs) == 1
     Enum.each(docs, fn d -> assert d["user_id"] < 100 end)
   end
@@ -51,16 +51,15 @@ defmodule LimitTests do
   test "limit field 5" do
     q = %{"age" => %{"$exists" => true}}
     {:ok, docs} = MangoDatabase.find(@db_name, q, limit: 250)
-    assert length(docs) == 75
+    assert length(docs) == LimitDocs.get_docs_length()
     Enum.each(docs, fn d -> assert d["age"] < 100 end)
   end
 
   test "limit skip field 1" do
     q = %{"$or" => [%{"user_id" => %{"$lt" => 100}}, %{"filtered_array.[]" => 1}]}
-    {:ok, docs} = MangoDatabase.find(@db_name, q, limit: 10, skip: 20)
+    {:ok, docs} = MangoDatabase.find(@db_name, q, limit: 10, skip: 20, sort: ["user_id"])
     assert length(docs) == 10
-    # TODO the next line fails
-    # Enum.each(docs, fn d -> assert d["user_id"] > 20 end)
+    Enum.each(docs, fn d -> assert d["user_id"] > 20 end)
   end
 
   test "limit skip field 2" do
