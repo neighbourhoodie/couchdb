@@ -43,24 +43,6 @@ defmodule MangoDatabase do
     resp = Couch.post("/#{db}/_bulk_docs", body: %{"docs" => docs})
   end
 
-  def create_index(db, fields, name) do
-    Couch.post("/#{db}/_index", body: %{
-      "index" => %{"fields" => fields},
-      "name" => name,
-      "ddoc" => name,
-      "type" => "json",
-      "w" => 3
-    })
-  end
-
-  def create_text_index(db) do
-    Couch.post("/#{db}/_index", body: %{
-      "index" => %{},
-      "type" => "text",
-      "w" => 3
-    })
-  end
-
   # If a certain keyword like sort or field is passed in the options,
   # then it is added to the request body.
   defp put_if_set(map, key, opts, opts_key) do
@@ -68,6 +50,45 @@ defmodule MangoDatabase do
       Map.put(map, key, opts[opts_key])
     else
       map
+    end
+  end
+
+  def create_index(db, fields, options \\ []) do
+    index = %{
+      "fields" => fields,
+    }
+    |> put_if_set("selector", options, :selector)
+    |> put_if_set("partial_filter_selector", options, :partial_filter_selector)
+
+    body = %{
+      "index" => index,
+      "type" => "json",
+      "w" => 3
+    }
+    |> put_if_set("type", options, :idx_type)
+    |> put_if_set("name", options, :name)
+    |> put_if_set("ddoc", options, :ddoc)
+
+    resp = Couch.post("/#{db}/_index", body: body)
+
+    {:ok, resp.body["result"] == "created"}
+  end
+
+  def create_text_index(db) do
+    Couch.post("/#{db}/_index", body: %{
+      "index" => %{},
+      "type" => "text",
+      "w" => 3
+    }
+    |> put_if_set("name", options, :name)
+    |> put_if_set("ddoc", options, :ddoc)
+
+    resp = Couch.post("/#{db}/_index", body: body)
+
+    if resp.status_code == 200 do
+      {:ok, resp.body["result"] == "created"}
+    else
+      {:error, resp}
     end
   end
 
