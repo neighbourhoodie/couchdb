@@ -40,7 +40,7 @@ defmodule BasicFindTest do
   test "bad limit" do
     bad_limits = [nil, true, false, -1, 1.2, "no limit!", %{"foo" => "bar"}, [2]]
     Enum.each(bad_limits, fn bl ->
-      {:error, resp} = MangoDatabase.find(@db_name, %{"int" => %{"$gt" => 2}}, limit: bl)
+      {:error, resp} = MangoDatabase.find(@db_name, %{"int" => %{"$gt" => 2}}, limit: bl, sort: [%{"age" => "asc"}])
       assert resp.status_code == 400
     end)
   end
@@ -48,7 +48,7 @@ defmodule BasicFindTest do
   test "bad skip" do
     bad_skips = [nil, true, false, -3, 1.2, "no limit!", %{"foo" => "bar"}, [2]]
     Enum.each(bad_skips, fn bs ->
-      {:error, resp} = MangoDatabase.find(@db_name, %{"int" => %{"$gt" => 2}}, skip: bs)
+      {:error, resp} = MangoDatabase.find(@db_name, %{"int" => %{"$gt" => 2}}, skip: bs, sort: [%{"age" => "asc"}])
       assert resp.status_code == 400
     end)
   end
@@ -179,7 +179,7 @@ defmodule BasicFindTest do
     assert length(docs) == 15
 
     Enum.each([0, 1, 5, 14], fn l ->
-      {:ok, docs} = MangoDatabase.find(@db_name, %{"age" => %{"$gt" => 0}}, limit: l)
+      {:ok, docs} = MangoDatabase.find(@db_name, %{"age" => %{"$gt" => 0}}, limit: l, sort: [%{"age" => "asc"}])
       assert length(docs) == l
     end)
   end
@@ -189,7 +189,7 @@ defmodule BasicFindTest do
     assert length(docs) == 15
 
     Enum.each([0, 1, 5, 14], fn s ->
-      {:ok, docs} = MangoDatabase.find(@db_name, %{"age" => %{"$gt" => 0}}, skip: s)
+      {:ok, docs} = MangoDatabase.find(@db_name, %{"age" => %{"$gt" => 0}}, skip: s, sort: [%{"age" => "asc"}])
       assert length(docs) == (15 - s)
     end)
   end
