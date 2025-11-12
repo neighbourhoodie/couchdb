@@ -734,5 +734,22 @@
   ],
   "IgnoreDesignDocsForAllDocsIndexTests": [
     "should not return design docs"
+  ],
+  "CustomFieldsTest": [
+    "basic",
+    "multi field",
+    "element access",
+    "index selection",
+    "in with array",
+    "in with array not explicit",
+    "in different types",
+    "nin with array",
+    "missing",
+    "missing type",
+    "field analyzer is keyword",
+    "escaped field",
+    "filtered search fields",
+    "two or",
+    "all match",
   ]
 }
