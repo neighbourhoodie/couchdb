@@ -53,14 +53,6 @@ defmodule MangoDatabase do
     })
   end
 
-  def create_text_index(db) do
-    Couch.post("/#{db}/_index", body: %{
-      "index" => %{},
-      "type" => "text",
-      "w" => 3
-    })
-  end
-
   # If a certain keyword like sort or field is passed in the options,
   # then it is added to the request body.
   defp put_if_set(map, key, opts, opts_key) do
@@ -69,6 +61,26 @@ defmodule MangoDatabase do
     else
       map
     end
+  end
+
+  def create_text_index(db, options \\ []) do
+    index = %{}
+    |> put_if_set("default_analyzer", options, :analyzer)
+    |> put_if_set("default_field", options, :default_field)
+    |> put_if_set("index_array_lengths", options, :index_array_lengths)
+    |> put_if_set("selector", options, :selector)
+    |> put_if_set("partial_filter_selector", options, :partial_filter_selector)
+    |> put_if_set("fields", options, :fields)
+
+    body = %{
+      "index" => index,
+      "type" => Keyword.get(options, :idx_type, "text"),
+      "w" => 3
+    }
+    |> put_if_set("name", options, :name)
+    |> put_if_set("ddoc", options, :ddoc)
+
+    Couch.post("/#{db}/_index", body: body)
   end
 
   # TODO: port more options from src/mango/test/mango.py `def find(...)`
