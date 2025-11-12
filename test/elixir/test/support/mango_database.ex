@@ -29,7 +29,7 @@ defmodule MangoDatabase do
     end
   end
 
-  defp create(db, opts) do
+  def create(db, opts \\ []) do
     partitioned = Keyword.get(opts, :partitioned, false)
     Couch.put("/#{db}?partitioned=#{partitioned}")
   end
