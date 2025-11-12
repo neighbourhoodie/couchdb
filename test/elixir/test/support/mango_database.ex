@@ -44,13 +44,19 @@ defmodule MangoDatabase do
   end
 
   def create_index(db, fields, name) do
-    Couch.post("/#{db}/_index", body: %{
+    resp = Couch.post("/#{db}/_index", body: %{
       "index" => %{"fields" => fields},
       "name" => name,
       "ddoc" => name,
       "type" => "json",
       "w" => 3
     })
+
+    if resp.status_code == 200 do
+      {:ok, resp.body["result"] == "created"}
+    else
+      {:error, resp}
+    end
   end
 
   def create_text_index(db) do
