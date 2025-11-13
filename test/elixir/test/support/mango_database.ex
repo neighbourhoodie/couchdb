@@ -47,6 +47,16 @@ defmodule MangoDatabase do
     Couch.post("/#{db}/_bulk_docs", body: body)
   end
 
+  # If a certain keyword like sort or field is passed in the options,
+  # then it is added to the request body.
+  defp put_if_set(map, key, opts, opts_key) do
+    if Keyword.has_key?(opts, opts_key) do
+      Map.put(map, key, opts[opts_key])
+    else
+      map
+    end
+  end
+
   # TODO: make this use batches if necessary
   def save_docs(db, docs, opts \\ []) do
     query = %{}
@@ -56,20 +66,20 @@ defmodule MangoDatabase do
     zipped_docs = Enum.zip(docs, result.body)
 
     # This returns the doc list including _id and _rev values
-    Enum.map(zipped_docs, fn {doc, result} ->
+    resp = Enum.map(zipped_docs, fn {doc, result} ->
       doc
       |> Map.put("_id", result["id"])
       |> Map.put("_rev", result["rev"])
     end)
-  end
 
-  # If a certain keyword like sort or field is passed in the options,
-  # then it is added to the request body.
-  defp put_if_set(map, key, opts, opts_key) do
-    if Keyword.has_key?(opts, opts_key) do
-      Map.put(map, key, opts[opts_key])
+    # _bulk_docs sometimes returns errors in the body and this is captured here
+    errors = Enum.filter(result.body, fn r ->
+      Map.has_key?(r, "error")
+    end)
+    if errors == [] do
+      resp
     else
-      map
+      {:error, errors}
     end
   end
 
