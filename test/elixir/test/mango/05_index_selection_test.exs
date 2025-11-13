@@ -397,3 +397,37 @@ defmodule TextIndexSelectionTest do
     assert Enum.at(docs, 0)["age"] == 48
   end
 end
+
+defmodule MultiTextIndexSelectionTest do
+  use CouchTestCase
+
+  @db_name "multi-text-index-selection"
+
+  setup do
+    if MangoDatabase.has_text_service() do
+      UserDocs.setup(@db_name, "text")
+      MangoDatabase.create_text_index(@db_name, ddoc: "foo", analyzer: "keyword")
+      MangoDatabase.create_text_index(@db_name, ddoc: "bar", analyzer: "email")
+      :ok
+    else
+      {:skip, "requires text service"}
+    end
+  end
+
+  test "fallback to json with multi text" do
+    {:ok, resp} = MangoDatabase.find(@db_name,
+      %{"name.first" => "A first name", "name.last" => "A last name"},
+      explain: true)
+    assert resp["index"]["type"] == "json"
+  end
+
+  test "multi text index is error" do
+    {:error, resp} = MangoDatabase.find(@db_name, %{"$text" => "a query"}, explain: true)
+    assert resp.status_code == 400
+  end
+
+  test "use index works" do
+    {:ok, resp} = MangoDatabase.find(@db_name, %{"$text" => "a query"}, use_index: "foo", explain: true)
+    assert resp["index"]["ddoc"] == "_design/foo"
+  end
+end
