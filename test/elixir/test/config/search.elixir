@@ -49,5 +49,8 @@
     "fallback to json with multi text",
     "multi text index is error",
     "use index works"
+  ],
+  "RegexVsTextIndexTest": [
+    "regex works with text index"
   ]
 }
