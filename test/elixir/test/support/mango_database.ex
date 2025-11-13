@@ -78,12 +78,30 @@ defmodule MangoDatabase do
     end
   end
 
-  def create_text_index(db) do
-    Couch.post("/#{db}/_index", body: %{
-      "index" => %{},
-      "type" => "text",
+  def create_text_index(db, options \\ []) do
+    index = %{}
+    |> put_if_set("default_analyzer", options, :analyzer)
+    |> put_if_set("default_field", options, :default_field)
+    |> put_if_set("index_array_lengths", options, :index_array_lengths)
+    |> put_if_set("selector", options, :selector)
+    |> put_if_set("partial_filter_selector", options, :partial_filter_selector)
+    |> put_if_set("fields", options, :fields)
+
+    body = %{
+      "index" => index,
+      "type" => Keyword.get(options, :idx_type, "text"),
       "w" => 3
-    })
+    }
+    |> put_if_set("name", options, :name)
+    |> put_if_set("ddoc", options, :ddoc)
+
+    resp = Couch.post("/#{db}/_index", body: body)
+
+    if resp.status_code == 200 do
+      {:ok, resp.body["result"] == "created"}
+    else
+      {:error, resp}
+    end
   end
 
   # TODO: port more options from src/mango/test/mango.py `def find(...)`
