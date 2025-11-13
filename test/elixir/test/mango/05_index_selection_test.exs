@@ -235,9 +235,6 @@ defmodule IndexSelectionTest do
     end)
   end
 
-  ###############
-  # NOTE: python uses test subset. for elixir separating them into separate tests
-  ###############
   test "use index without fallback succeeds for valid index" do
     {:ok, docs} = MangoDatabase.find(@db_name, %{"manager" => true}, use_index: "manager", allow_fallback: false)
     assert length(docs) > 0
@@ -329,11 +326,7 @@ defmodule TextIndexSelectionTest do
   @db_name "text-index-selection"
 
   setup do
-    if MangoDatabase.has_text_service() do
-      UserDocs.setup(@db_name, "text")
-    else
-      {:skip, "requires text service"}
-    end
+    UserDocs.setup(@db_name, "text")
   end
 
   test "with text" do
@@ -404,14 +397,10 @@ defmodule MultiTextIndexSelectionTest do
   @db_name "multi-text-index-selection"
 
   setup do
-    if MangoDatabase.has_text_service() do
-      UserDocs.setup(@db_name, "text")
-      MangoDatabase.create_text_index(@db_name, ddoc: "foo", analyzer: "keyword")
-      MangoDatabase.create_text_index(@db_name, ddoc: "bar", analyzer: "email")
-      :ok
-    else
-      {:skip, "requires text service"}
-    end
+    UserDocs.setup(@db_name, "text")
+    MangoDatabase.create_text_index(@db_name, ddoc: "foo", analyzer: "keyword")
+    MangoDatabase.create_text_index(@db_name, ddoc: "bar", analyzer: "email")
+    :ok
   end
 
   test "fallback to json with multi text" do
@@ -429,5 +418,33 @@ defmodule MultiTextIndexSelectionTest do
   test "use index works" do
     {:ok, resp} = MangoDatabase.find(@db_name, %{"$text" => "a query"}, use_index: "foo", explain: true)
     assert resp["index"]["ddoc"] == "_design/foo"
+  end
+end
+
+defmodule RegexVsTextIndexTest do
+  use CouchTestCase
+
+  @db_name "regex-text-index"
+
+  setup do
+    MangoDatabase.recreate(@db_name)
+    :ok
+  end
+
+  test "regex works with text index" do
+    doc = %{"currency" => "HUF", "location" => "EUROPE"}
+    MangoDatabase.save_docs(@db_name, [doc], w: 3)
+
+    selector = %{"currency" => %{"$regex" => "HUF"}}
+    {:ok, docs} = MangoDatabase.find(@db_name, selector)
+    
+    assert docs == [doc]
+
+    # Now that it is confirmed to be working, try again the
+    # previous query with a text index on `location`.  This
+    # attempt should succeed as well.
+    MangoDatabase.create_text_index(@db_name, name: "TextIndexByLocation", fields: [%{"name" => "location", "type" => "string"}])
+    {:ok, docs} = MangoDatabase.find(@db_name, selector)
+    assert docs == [doc]
   end
 end
