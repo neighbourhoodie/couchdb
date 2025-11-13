@@ -219,7 +219,7 @@ defmodule IndexSelectionTest do
     ###############
     # NOTE: python used KeyError but in elixir using return error, in the absence of a better solution.
     ###############
-    assert {:error, _} = MangoDatabase.save_docs(@db_name, design_doc)
+    assert {:error, _} = MangoDatabase.save_docs(@db_name, [design_doc])
   end
 
   test "explain sort reverse" do
@@ -321,5 +321,79 @@ defmodule JSONIndexSelectionTest do
     {:ok, resp_explain} = MangoDatabase.find(@db_name, selector, explain: true)
     assert resp_explain["index"]["type"] == "special"
   end
+end
 
+defmodule TextIndexSelectionTest do
+  use CouchTestCase
+
+  @db_name "text-index-selection"
+
+  setup do
+    if MangoDatabase.has_text_service() do
+      UserDocs.setup(@db_name, "text")
+    else
+      {:skip, "requires text service"}
+    end
+  end
+
+  test "with text" do
+    {:ok, resp} = MangoDatabase.find(@db_name,
+      %{
+        "$text" => "Stephanie",
+        "name.first" => "Stephanie",
+        "name.last" => "This doesn't have to match anything.",
+      },
+      explain: true,
+    )
+    assert resp["index"]["type"] == "text"
+  end
+
+  test "no view index" do
+    {:ok, resp} = MangoDatabase.find(@db_name, %{"name.first" => "Ohai!"}, explain: true)
+    assert resp["index"]["type"] == "text"
+  end
+
+  test "with or" do
+    {:ok, resp} = MangoDatabase.find(@db_name,
+    %{
+      "$or": [
+          %{"name.first" => "Stephanie"},
+          %{"name.last" => "This doesn't have to match anything."},
+        ]
+      },
+      explain: true,
+    )
+    assert resp["index"]["type"] == "text"
+  end
+
+  test "manual bad text idx" do
+    design_doc = %{
+      "_id" => "_design/bad_text_index",
+      "language" => "query",
+      "indexes" => %{
+        "text_index" => %{
+          "default_analyzer" => "keyword",
+          "default_field" => %{},
+          "selector" => %{},
+          "fields" => "all_fields",
+          "analyzer" => %{
+            "name" => "perfield",
+            "default" => "keyword",
+            "fields" => %{"$default" => "standard"},
+          },
+        }
+      },
+      "indexes" => %{
+        "st_index" => %{
+          "analyzer" => "standard",
+          "index" => 'function(doc){\n index("st_index", doc.geometry);\n}',
+        }
+      },
+    }
+    MangoDatabase.save_docs(@db_name, [design_doc])
+    {:ok, docs} = MangoDatabase.find(@db_name, %{"age" => 48})
+    assert length(docs) == 1
+    assert Enum.at(docs, 0)["name"]["first"] == "Stephanie"
+    assert Enum.at(docs, 0)["age"] == 48
+  end
 end
