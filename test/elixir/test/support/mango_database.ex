@@ -16,6 +16,16 @@ defmodule MangoDatabase do
     "search" in resp.body["features"]
   end
 
+  def path(db, parts) do
+    parts_list =
+      case parts do
+        p when is_binary(p) -> [p]
+        p when is_list(p) -> p
+      end
+
+    Path.join(["/#{db}" | parts_list])
+  end
+
   def recreate(db, opts \\ []) do
     resp = Couch.get("/#{db}")
     if resp.status_code == 200 do
@@ -40,7 +50,25 @@ defmodule MangoDatabase do
 
   # TODO: make this use batches if necessary
   def save_docs(db, docs) do
-    resp = Couch.post("/#{db}/_bulk_docs", body: %{"docs" => docs})
+    response = Couch.post("/#{db}/_bulk_docs", body: %{"docs" => docs})
+    response.body
+  end
+
+  def open_doc(db, docid) do
+    response = Couch.get("/#{db}/#{docid}")
+    response.body
+  end
+
+  def delete_doc(db, docid) do
+    path = "/#{db}/#{URI.encode(docid)}"
+    doc = Couch.get(path)
+    original_rev = doc.body["_rev"]
+    Couch.delete(path, query: %{"rev" => original_rev})
+  end
+
+  def ddoc_info(db, ddocid) do
+    response = Couch.get("/#{db}/#{ddocid}/_info")
+    response.body
   end
 
   # If a certain keyword like sort or field is passed in the options,
@@ -71,8 +99,8 @@ defmodule MangoDatabase do
 
     resp = Couch.post("/#{db}/_index", body: body)
 
-    if resp.status_code == 200 do
-      {:ok, resp.body["result"] == "created"}
+    if resp.body["result"] == "created" do
+      {:ok, resp.body["indexes"]}
     else
       {:error, resp}
     end
@@ -97,11 +125,46 @@ defmodule MangoDatabase do
 
     resp = Couch.post("/#{db}/_index", body: body)
 
-    if resp.status_code == 200 do
-      {:ok, resp.body["result"] == "created"}
+    if resp.body["result"] == "created" do
+      {:ok, resp.body["indexes"]}
     else
       {:error, resp}
     end
+  end
+
+  def list_indexes(db, opts \\ []) do
+    limit = Keyword.get(opts, :limit)
+    skip  = Keyword.get(opts, :skip)
+    query =
+      [limit: limit, skip: skip]
+      |> Enum.filter(fn {_k, v} -> not is_nil(v) end)
+      |> Enum.map(fn {k, v} -> "#{k}=#{v}" end)
+      |> Enum.join("&")
+
+    path =
+      if query == "" do
+        "/#{db}/_index"
+      else
+        "/#{db}/_index?#{query}"
+      end
+    resp = Couch.get(path)
+
+    if resp.status_code == 200 do
+      {:ok, resp.body["indexes"]}
+    else
+      {:error, resp}
+    end
+  end
+
+  def delete_index(db, ddocid, name, idx_type \\ "json") do
+    path = Path.join(["_index", ddocid, idx_type, name])
+    Couch.delete("/#{db}/#{path}", params: %{"w" => "3"})
+  end
+
+  def bulk_delete(db, docs) do
+    body = %{"docids" => docs, "w" => 3}
+    resp = Couch.post("/#{db}/_index/_bulk_delete", body: body)
+    resp.body
   end
 
   # TODO: port more options from src/mango/test/mango.py `def find(...)`
