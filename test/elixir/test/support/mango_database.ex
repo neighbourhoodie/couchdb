@@ -16,6 +16,16 @@ defmodule MangoDatabase do
     "search" in resp.body["features"]
   end
 
+  def path(db, parts) do
+    parts_list =
+      case parts do
+        p when is_binary(p) -> [p]
+        p when is_list(p) -> p
+      end
+
+    Path.join(["/#{db}" | parts_list])
+  end
+
   def recreate(db, opts \\ []) do
     resp = Couch.get("/#{db}")
     if resp.status_code == 200 do
