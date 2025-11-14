@@ -117,11 +117,33 @@ defmodule MangoDatabase do
 
     resp = Couch.post("/#{db}/_index", body: body)
 
+  def list_indexes(db, opts \\ []) do
+    limit = Keyword.get(opts, :limit)
+    skip  = Keyword.get(opts, :skip)
+    query =
+      [limit: limit, skip: skip]
+      |> Enum.filter(fn {_k, v} -> not is_nil(v) end)
+      |> Enum.map(fn {k, v} -> "#{k}=#{v}" end)
+      |> Enum.join("&")
+
+    path =
+      if query == "" do
+        "/#{db}/_index"
+      else
+        "/#{db}/_index?#{query}"
+      end
+    resp = Couch.get(path)
+
     if resp.status_code == 200 do
-      {:ok, resp.body["result"] == "created"}
+      {:ok, resp.body["indexes"]}
     else
       {:error, resp}
     end
+  end
+
+  def delete_index(db, ddocid, name, idx_type \\ "json") do
+    path = Path.join(["_index", ddocid, idx_type, name])
+    Couch.delete("/#{db}/#{path}", params: %{"w" => "3"})
   end
 
   # TODO: port more options from src/mango/test/mango.py `def find(...)`
