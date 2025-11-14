@@ -99,7 +99,11 @@ defmodule MangoDatabase do
 
     resp = Couch.post("/#{db}/_index", body: body)
 
-    {:ok, resp.body["result"] == "created"}
+    if resp.body["result"] == "created" do
+      {:ok, resp.body["indexes"]}
+    else
+      {:error, resp}
+    end
   end
 
   def create_text_index(db, options \\ []) do
@@ -121,7 +125,11 @@ defmodule MangoDatabase do
 
     resp = Couch.post("/#{db}/_index", body: body)
 
-    {:ok, resp.body["result"] == "created"}
+    if resp.body["result"] == "created" do
+      {:ok, resp.body["indexes"]}
+    else
+      {:error, resp}
+    end
   end
 
   def list_indexes(db, opts \\ []) do
