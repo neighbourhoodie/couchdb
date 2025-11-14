@@ -38,11 +38,6 @@ defmodule MangoDatabase do
     Couch.delete("/#{db}")
   end
 
-  # TODO: make this use batches if necessary
-  def save_docs(db, docs) do
-    resp = Couch.post("/#{db}/_bulk_docs", body: %{"docs" => docs})
-  end
-
   # If a certain keyword like sort or field is passed in the options,
   # then it is added to the request body.
   defp put_if_set(map, key, opts, opts_key) do
@@ -50,6 +45,18 @@ defmodule MangoDatabase do
       Map.put(map, key, opts[opts_key])
     else
       map
+    end
+  end
+
+  # TODO: make this use batches if necessary
+  def save_docs(db, docs, opts \\ []) do
+    query = %{}
+    |> put_if_set("w", opts, :w)
+
+    resp = Couch.post("/#{db}/_bulk_docs", body: %{"docs" => docs}, query: query)
+    case {resp.status_code} do
+      {200} -> {:ok, resp}
+      _ -> {:error, resp}
     end
   end
 
@@ -133,6 +140,7 @@ defmodule MangoDatabase do
     }
     |> put_if_set("sort", options, :sort)
     |> put_if_set("fields", options, :fields)
+    |> put_if_set("allow_fallback", options, :allow_fallback)
     )
 
     case {(options[:explain] or options[:return_raw]), resp.status_code} do
