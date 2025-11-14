@@ -734,5 +734,13 @@
   ],
   "IgnoreDesignDocsForAllDocsIndexTests": [
     "should not return design docs"
+  ],
+  "UsersDbFindTests": [
+    "simple find",
+    "multi cond and",
+    "multi cond or",
+    "sort",
+    "fields",
+    "empty"
   ]
 }
