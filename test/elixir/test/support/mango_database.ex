@@ -53,6 +53,16 @@ defmodule MangoDatabase do
     resp = Couch.post("/#{db}/_bulk_docs", body: %{"docs" => docs})
   end
 
+  def open_doc(db, docid) do
+    response = Couch.get("/#{db}/#{docid}")
+    response.body
+  end
+
+  def ddoc_info(db, ddocid) do
+    response = Couch.get("/#{db}/#{ddocid}/_info")
+    response.body
+  end
+
   # If a certain keyword like sort or field is passed in the options,
   # then it is added to the request body.
   defp put_if_set(map, key, opts, opts_key) do
