@@ -50,12 +50,20 @@ defmodule MangoDatabase do
 
   # TODO: make this use batches if necessary
   def save_docs(db, docs) do
-    resp = Couch.post("/#{db}/_bulk_docs", body: %{"docs" => docs})
+    response = Couch.post("/#{db}/_bulk_docs", body: %{"docs" => docs})
+    response.body
   end
 
   def open_doc(db, docid) do
     response = Couch.get("/#{db}/#{docid}")
     response.body
+  end
+
+  def delete_doc(db, docid) do
+    path = "/#{db}/#{URI.encode(docid)}"
+    doc = Couch.get(path)
+    original_rev = doc.body["_rev"]
+    Couch.delete(path, query: %{"rev" => original_rev})
   end
 
   def ddoc_info(db, ddocid) do
@@ -143,6 +151,12 @@ defmodule MangoDatabase do
   def delete_index(db, ddocid, name, idx_type \\ "json") do
     path = Path.join(["_index", ddocid, idx_type, name])
     Couch.delete("/#{db}/#{path}", params: %{"w" => "3"})
+  end
+
+  def bulk_delete(db, docs) do
+    body = %{"docids" => docs, "w" => 3}
+    resp = Couch.post("/#{db}/_index/_bulk_delete", body: body)
+    resp.body
   end
 
   # TODO: port more options from src/mango/test/mango.py `def find(...)`
