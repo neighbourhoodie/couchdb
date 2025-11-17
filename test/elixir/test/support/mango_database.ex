@@ -125,6 +125,7 @@ defmodule MangoDatabase do
     }
     |> put_if_set("sort", options, :sort)
     |> put_if_set("fields", options, :fields)
+    |> put_if_set("execution_stats", options, :executionStats)
     )
 
     case {(options[:explain] or options[:return_raw]), resp.status_code} do
