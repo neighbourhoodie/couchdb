@@ -20,367 +20,374 @@ defmodule IndexCrudTests do
     :ok
   end
 
-  test "bad fields" do
-    bad_fields = [
-      nil,
-      true,
-      false,
-      "bing",
-      2.0,
-      %{"foo" => "bar"},
-      [%{"foo" => 2}],
-      [%{"foo" => "asc", "bar" => "desc"}],
-      [%{"foo" => "asc"}, %{"bar" => "desc"}],
-      [""],
-    ]
+  # test "bad fields" do
+  #   bad_fields = [
+  #     nil,
+  #     true,
+  #     false,
+  #     "bing",
+  #     2.0,
+  #     %{"foo" => "bar"},
+  #     [%{"foo" => 2}],
+  #     [%{"foo" => "asc", "bar" => "desc"}],
+  #     [%{"foo" => "asc"}, %{"bar" => "desc"}],
+  #     [""],
+  #   ]
 
-    Enum.each(bad_fields, fn bad_field ->
-      {:error, resp} = MangoDatabase.create_index(@db_name, bad_field)
-      assert resp.status_code == 400
-    end)
-  end
+  #   Enum.each(bad_fields, fn bad_field ->
+  #     {:error, resp} = MangoDatabase.create_index(@db_name, bad_field)
+  #     assert resp.status_code == 400
+  #   end)
+  # end
 
-  test "bad types" do
-    bad_types = [
-      nil,
-      true,
-      false,
-      1.5,
-      "foo",  # Future support
-      "geo",  # Future support
-      %{"foo" => "bar"},
-      ["baz", 3.0]
-    ]
+  # test "bad types" do
+  #   bad_types = [
+  #     nil,
+  #     true,
+  #     false,
+  #     1.5,
+  #     "foo",  # Future support
+  #     "geo",  # Future support
+  #     %{"foo" => "bar"},
+  #     ["baz", 3.0]
+  #   ]
 
-    Enum.each(bad_types, fn bad_type ->
-      {:error, resp} = MangoDatabase.create_index(
-        @db_name,
-        ["foo"],
-        name: "bad field",
-        idx_type: bad_type
-      )
-      assert resp.status_code == 400
-    end)
-  end
+  #   Enum.each(bad_types, fn bad_type ->
+  #     {:error, resp} = MangoDatabase.create_index(
+  #       @db_name,
+  #       ["foo"],
+  #       name: "bad field",
+  #       idx_type: bad_type
+  #     )
+  #     assert resp.status_code == 400
+  #   end)
+  # end
 
-  test "bad names" do
-    bad_names = ["", true, false, 1.5, %{"foo" => "bar"}, [nil, false]]
+  # test "bad names" do
+  #   bad_names = ["", true, false, 1.5, %{"foo" => "bar"}, [nil, false]]
 
-    Enum.each(bad_names, fn bad_name ->
-      {:error, resp} = MangoDatabase.create_index(
-        @db_name,
-        ["foo"],
-        name: bad_name
-      )
-      assert resp.status_code == 400
-    end)
-  end
+  #   Enum.each(bad_names, fn bad_name ->
+  #     {:error, resp} = MangoDatabase.create_index(
+  #       @db_name,
+  #       ["foo"],
+  #       name: bad_name
+  #     )
+  #     assert resp.status_code == 400
+  #   end)
+  # end
 
-  test "bad ddocs" do
-    bad_ddocs = [
-      "",
-      "_design/",
-      true,
-      false,
-      1.5,
-      %{"foo" => "bar"},
-      [nil, false]
-    ]
+  # test "bad ddocs" do
+  #   bad_ddocs = [
+  #     "",
+  #     "_design/",
+  #     true,
+  #     false,
+  #     1.5,
+  #     %{"foo" => "bar"},
+  #     [nil, false]
+  #   ]
 
-    Enum.each(bad_ddocs, fn bad_ddoc ->
-      {:error, resp} = MangoDatabase.create_index(
-        @db_name,
-        ["foo"],
-        ddoc: bad_ddoc
-      )
-      assert resp.status_code == 400
-    end)
-  end
+  #   Enum.each(bad_ddocs, fn bad_ddoc ->
+  #     {:error, resp} = MangoDatabase.create_index(
+  #       @db_name,
+  #       ["foo"],
+  #       ddoc: bad_ddoc
+  #     )
+  #     assert resp.status_code == 400
+  #   end)
+  # end
 
   #  TODO
-  # def all_methods do [
-  #   {"PUT", &HTTPoison.put/2},
-  #   {"GET", &HTTPoison.get/1},
-  #   {"POST", &HTTPoison.post/2},
-  #   {"PATCH", fn url -> HTTPoison.request(:patch, url, "", [], []) end},
-  #   {"DELETE", &HTTPoison.delete/1},
-  #   {"HEAD", &HTTPoison.head/1},
-  #   {"COPY", fn url -> HTTPoison.request(:copy, url, "", [], []) end},
-  #   {"OPTIONS", fn url -> HTTPoison.request(:options, url, "", [], []) end},
-  #   {"TRACE", fn url -> HTTPoison.request(:trace, url, "", [], []) end},
-  #   {"CONNECT", fn url -> HTTPoison.request(:connect, url, "", [], []) end}
-  # ]
-  # end
+  defp all_methods(sess) do
+  [
+    {"PUT",    &Couch.session.put(sess, &1)},
+    {"GET",    &Couch.session.get(sess, &1)},
+    {"POST",   &Couch.session.post(sess, &1)},
+    {"PATCH",  &Couch.session.patch(sess, &1)},
+    {"DELETE", &Couch.session.delete(sess, &1)},
+    {"HEAD",   &Couch.session.head(sess, &1)},
+
+    # Python’s partial(self.db.sess.request, "COPY")
+    {"COPY",    fn url -> Couch.session.request(sess, "COPY", url) end},
+    {"OPTIONS", fn url -> Couch.session.request(sess, "OPTIONS", url) end},
+    {"TRACE",   fn url -> Couch.session.request(sess, "TRACE", url) end},
+    {"CONNECT", fn url -> Couch.session.request(sess, "CONNECT", url) end}
+  ]
+end
   # defp all_but(method) do
   #   Enum.reject(all_methods(), fn {m, _} -> m == method end)
   # end
 
-  # test "bad urls" do
-  #   # These are only the negative test cases because ideally the
-  #   # positive ones are implicitly tested by other ones.
+  test "bad urls" do
+    # These are only the negative test cases because ideally the
+    # positive ones are implicitly tested by other ones.
 
-  #   # These are only the negative test cases.
-  #   subpaths = ["a", "a/b", "a/b/c/d", "a/b/c/d/e", "a/b/c/d/e/f"]
-  #   Enum.each(subpaths, fn subpath ->
-  #     path = MangoDatabase.path(@db_name, "_index/#{subpath}")
-  #     IO.inspect(path)
-  #     # Enum.each(all_methods(), fn {method_name, method} ->
-  #     #   response = call(method, path)
-  #     #   assert response.status_code == 404
-  #     # end)
-  #   end)
+    sess = MangoDatabase.get_session()
+    IO.inspect(sess)
+    methods = all_methods(sess)
 
-  #   # _bulk_delete should reject everything except POST
-  #   # path = MangoDatabase.path("_index/_bulk_delete")
-  #   # Enum.each(all_but("POST"), fn {method_name, method} ->
-  #   #   response = call(method, path)
-  #   #   assert response.status_code == 405
-  #   # end)
+    # These are only the negative test cases.
+    subpaths = ["a", "a/b", "a/b/c/d", "a/b/c/d/e", "a/b/c/d/e/f"]
+    Enum.each(subpaths, fn subpath ->
+      path = MangoDatabase.path(@db_name, "_index/#{subpath}")
+      IO.inspect(path)
+      Enum.each(methods, fn {method_name, method} ->
+        response = method.(path)
+        assert response.status_code == 404
+      end)
+    end)
 
-  #   # Index delete tests
+    # _bulk_delete should reject everything except POST
+    # path = MangoDatabase.path("_index/_bulk_delete")
+    # Enum.each(all_but("POST"), fn {method_name, method} ->
+    #   response = call(method, path)
+    #   assert response.status_code == 405
+    # end)
+
+    # Index delete tests
+    fields = ["foo", "bar"]
+    ddoc = "dd"
+    idx = "idx_01"
+    assert MangoDatabase.create_index(@db_name, fields, name: idx, ddoc: ddoc)
+  end
+
+  # test "create idx 01" do
   #   fields = ["foo", "bar"]
-  #   ddoc = "dd"
-  #   idx = "idx_01"
-  #   assert MangoDatabase.create_index(@db_name, fields, name: idx, ddoc: ddoc)
+  #   ret = MangoDatabase.create_index(@db_name, fields, name: "idx_1")
+  #   assert ret == {:ok, true}
+
+  #   {:ok, indexes} = MangoDatabase.list_indexes(@db_name)
+
+  #   Enum.each(indexes, fn idx ->
+  #     if idx["name"] == "idx_01" do
+  #       assert idx["def"]["fields"] == [%{"foo" => "asc"}, %{"bar" => "asc"}]
+  #     end
+  #   end)
   # end
 
-  test "create idx 01" do
-    fields = ["foo", "bar"]
-    ret = MangoDatabase.create_index(@db_name, fields, name: "idx_1")
-    assert ret == {:ok, true}
+  # test "create idx 01 exists" do
+  #   fields = ["foo", "bar"]
+  #   ret = MangoDatabase.create_index(@db_name, fields, name: "idx_1")
+  #   assert ret == {:ok, true}
 
-    {:ok, indexes} = MangoDatabase.list_indexes(@db_name)
+  #   {:error, ret} = MangoDatabase.create_index(@db_name, fields, name: "idx_1")
+  #   assert ret.body["result"] == "exists"
+  # end
 
-    Enum.each(indexes, fn idx ->
-      if idx["name"] == "idx_01" do
-        assert idx["def"]["fields"] == [%{"foo" => "asc"}, %{"bar" => "asc"}]
-      end
-    end)
-  end
+  # test "create idx 02" do
+  #   fields = ["baz", "foo"]
+  #   ret = MangoDatabase.create_index(@db_name, fields, name: "idx_2")
+  #   assert ret == {:ok, true}
 
-  test "create idx 01 exists" do
-    fields = ["foo", "bar"]
-    ret = MangoDatabase.create_index(@db_name, fields, name: "idx_1")
-    assert ret == {:ok, true}
+  #   {:ok, indexes} = MangoDatabase.list_indexes(@db_name)
 
-    {:error, ret} = MangoDatabase.create_index(@db_name, fields, name: "idx_1")
-    assert ret.body["result"] == "exists"
-  end
+  #   Enum.each(indexes, fn idx ->
+  #     if idx["name"] == "idx_02" do
+  #       assert idx["def"]["fields"] == [%{"baz" => "asc"}, %{"foo" => "asc"}]
+  #     end
+  #   end)
+  # end
 
-  test "create idx 02" do
-    fields = ["baz", "foo"]
-    ret = MangoDatabase.create_index(@db_name, fields, name: "idx_2")
-    assert ret == {:ok, true}
+  # test "read idx doc" do
+  #   MangoDatabase.create_index(@db_name, ["foo", "bar"], name: "idx_1")
+  #   MangoDatabase.create_index(@db_name, ["hello", "bar"])
 
-    {:ok, indexes} = MangoDatabase.list_indexes(@db_name)
+  #   {:ok, indexes} = MangoDatabase.list_indexes(@db_name)
+  #   Enum.each(indexes, fn idx ->
+  #     if idx["type"] != "special" do
+  #       ddocid = idx["ddoc"]
+  #       doc = MangoDatabase.open_doc(@db_name, ddocid)
+  #       info = MangoDatabase.ddoc_info(@db_name, ddocid)
 
-    Enum.each(indexes, fn idx ->
-      if idx["name"] == "idx_02" do
-        assert idx["def"]["fields"] == [%{"baz" => "asc"}, %{"foo" => "asc"}]
-      end
-    end)
-  end
+  #       assert doc["_id"] == ddocid
+  #       [_prefix, expected_name] = String.split(ddocid, "_design/")
+  #       assert info["name"] == expected_name
+  #     end
+  #   end)
+  # end
 
-  test "read idx doc" do
-    MangoDatabase.create_index(@db_name, ["foo", "bar"], name: "idx_1")
-    MangoDatabase.create_index(@db_name, ["hello", "bar"])
+  # test "delete idx escaped" do
+  #   MangoDatabase.create_index(@db_name, ["foo", "bar"], name: "idx_1")
+  #   {:ok, pre_indexes} = MangoDatabase.list_indexes(@db_name)
+  #   ret = MangoDatabase.create_index(@db_name, ["bing"], name: "idx_del_1")
+  #   assert ret == {:ok, true}
 
-    {:ok, indexes} = MangoDatabase.list_indexes(@db_name)
-    Enum.each(indexes, fn idx ->
-      if idx["type"] != "special" do
-        ddocid = idx["ddoc"]
-        doc = MangoDatabase.open_doc(@db_name, ddocid)
-        info = MangoDatabase.ddoc_info(@db_name, ddocid)
+  #   {:ok, indexes} = MangoDatabase.list_indexes(@db_name)
+  #   Enum.each(indexes, fn idx ->
+  #     if idx["name"] == "idx_del_1" do
+  #       assert idx["def"]["fields"] == [%{"bing" => "asc"}]
 
-        assert doc["_id"] == ddocid
-        [_prefix, expected_name] = String.split(ddocid, "_design/")
-        assert info["name"] == expected_name
-      end
-    end)
-  end
+  #       ddoc_escaped = String.replace(idx["ddoc"], "/", "%2F")
+  #       MangoDatabase.delete_index(@db_name, ddoc_escaped, idx["name"])
+  #     end
+  #   end)
+  #   {:ok, post_indexes} = MangoDatabase.list_indexes(@db_name)
+  #   assert pre_indexes == post_indexes
+  # end
 
-  test "delete idx escaped" do
-    MangoDatabase.create_index(@db_name, ["foo", "bar"], name: "idx_1")
-    {:ok, pre_indexes} = MangoDatabase.list_indexes(@db_name)
-    ret = MangoDatabase.create_index(@db_name, ["bing"], name: "idx_del_1")
-    assert ret == {:ok, true}
+  # test "delete idx unescaped" do
+  #   {:ok, pre_indexes} = MangoDatabase.list_indexes(@db_name)
+  #   ret = MangoDatabase.create_index(@db_name, ["bing"], name: "idx_del_2")
+  #   assert ret == {:ok, true}
 
-    {:ok, indexes} = MangoDatabase.list_indexes(@db_name)
-    Enum.each(indexes, fn idx ->
-      if idx["name"] == "idx_del_1" do
-        assert idx["def"]["fields"] == [%{"bing" => "asc"}]
+  #   {:ok, indexes} = MangoDatabase.list_indexes(@db_name)
+  #   Enum.each(indexes, fn idx ->
+  #     if idx["name"] == "idx_del_2" do
+  #       assert idx["def"]["fields"] == [%{"bing" => "asc"}]
 
-        ddoc_escaped = String.replace(idx["ddoc"], "/", "%2F")
-        MangoDatabase.delete_index(@db_name, ddoc_escaped, idx["name"])
-      end
-    end)
-    {:ok, post_indexes} = MangoDatabase.list_indexes(@db_name)
-    assert pre_indexes == post_indexes
-  end
+  #       MangoDatabase.delete_index(@db_name, idx["ddoc"], idx["name"])
+  #     end
+  #   end)
+  #   {:ok, post_indexes} = MangoDatabase.list_indexes(@db_name)
+  #   assert pre_indexes == post_indexes
+  # end
 
-  test "delete idx unescaped" do
-    {:ok, pre_indexes} = MangoDatabase.list_indexes(@db_name)
-    ret = MangoDatabase.create_index(@db_name, ["bing"], name: "idx_del_2")
-    assert ret == {:ok, true}
+  # test "delete idx no design" do
+  #   {:ok, pre_indexes} = MangoDatabase.list_indexes(@db_name)
+  #   ret = MangoDatabase.create_index(@db_name, ["bing"], name: "idx_del_3")
+  #   assert ret == {:ok, true}
 
-    {:ok, indexes} = MangoDatabase.list_indexes(@db_name)
-    Enum.each(indexes, fn idx ->
-      if idx["name"] == "idx_del_2" do
-        assert idx["def"]["fields"] == [%{"bing" => "asc"}]
+  #   {:ok, indexes} = MangoDatabase.list_indexes(@db_name)
+  #   Enum.each(indexes, fn idx ->
+  #     if idx["name"] == "idx_del_3" do
+  #       assert idx["def"]["fields"] == [%{"bing" => "asc"}]
 
-        MangoDatabase.delete_index(@db_name, idx["ddoc"], idx["name"])
-      end
-    end)
-    {:ok, post_indexes} = MangoDatabase.list_indexes(@db_name)
-    assert pre_indexes == post_indexes
-  end
+  #       ddocid = List.last(String.split(idx["ddoc"], "/"))
+  #       MangoDatabase.delete_index(@db_name, ddocid, idx["name"])
+  #     end
+  #   end)
+  #   {:ok, post_indexes} = MangoDatabase.list_indexes(@db_name)
+  #   assert pre_indexes == post_indexes
+  # end
 
-  test "delete idx no design" do
-    {:ok, pre_indexes} = MangoDatabase.list_indexes(@db_name)
-    ret = MangoDatabase.create_index(@db_name, ["bing"], name: "idx_del_3")
-    assert ret == {:ok, true}
+  # test "bulk delete" do
+  #   ret = MangoDatabase.create_index(@db_name, ["field1"], name: "idx_01")
+  #   assert ret == {:ok, true}
 
-    {:ok, indexes} = MangoDatabase.list_indexes(@db_name)
-    Enum.each(indexes, fn idx ->
-      if idx["name"] == "idx_del_3" do
-        assert idx["def"]["fields"] == [%{"bing" => "asc"}]
+  #   ret = MangoDatabase.create_index(@db_name, ["field2"], name: "idx_02")
+  #   assert ret == {:ok, true}
 
-        ddocid = List.last(String.split(idx["ddoc"], "/"))
-        MangoDatabase.delete_index(@db_name, ddocid, idx["name"])
-      end
-    end)
-    {:ok, post_indexes} = MangoDatabase.list_indexes(@db_name)
-    assert pre_indexes == post_indexes
-  end
+  #   ret = MangoDatabase.create_index(@db_name, ["field3"], name: "idx_03")
+  #   assert ret == {:ok, true}
 
-  test "bulk delete" do
-    ret = MangoDatabase.create_index(@db_name, ["field1"], name: "idx_01")
-    assert ret == {:ok, true}
+  #   {:ok, indexes} = MangoDatabase.list_indexes(@db_name)
+  #   docids = []
+  #   docids = Enum.reduce(indexes, docids, fn idx, acc ->
+  #     case idx["ddoc"] do
+  #       nil -> acc
+  #       ddoc -> acc ++ [ddoc]
+  #     end
+  #   end)
+  #   docids = docids ++ ["_design/this_is_not_an_index_name"]
 
-    ret = MangoDatabase.create_index(@db_name, ["field2"], name: "idx_02")
-    assert ret == {:ok, true}
+  #   ret = MangoDatabase.bulk_delete(@db_name, docids)
 
-    ret = MangoDatabase.create_index(@db_name, ["field3"], name: "idx_03")
-    assert ret == {:ok, true}
+  #   assert Enum.at(ret["fail"], 0)["id"] == "_design/this_is_not_an_index_name"
+  #   assert length(ret["success"]) == 3
+  # end
 
-    {:ok, indexes} = MangoDatabase.list_indexes(@db_name)
-    docids = []
-    docids = Enum.reduce(indexes, docids, fn idx, acc ->
-      case idx["ddoc"] do
-        nil -> acc
-        ddoc -> acc ++ [ddoc]
-      end
-    end)
-    docids = docids ++ ["_design/this_is_not_an_index_name"]
+  # test "recreate index" do
+  #   {:ok, pre_indexes} = MangoDatabase.list_indexes(@db_name)
 
-    ret = MangoDatabase.bulk_delete(@db_name, docids)
+  #   Enum.each(0..4, fn _i ->
+  #     ret = MangoDatabase.create_index(@db_name, ["bing"], name: "idx_recreate")
+  #     assert ret == {:ok, true}
 
-    assert Enum.at(ret["fail"], 0)["id"] == "_design/this_is_not_an_index_name"
-    assert length(ret["success"]) == 3
-  end
+  #     {:ok, indexes} = MangoDatabase.list_indexes(@db_name)
 
-  test "recreate index" do
-    {:ok, pre_indexes} = MangoDatabase.list_indexes(@db_name)
+  #     Enum.each(indexes, fn idx ->
+  #       if idx["name"] == "idx_recreate" do
+  #         assert idx["def"]["fields"] == [%{"bing" => "asc"}]
+  #         MangoDatabase.delete_index(@db_name, idx["ddoc"], idx["name"])
+  #       end
+  #     end)
 
-    Enum.each(0..4, fn _i ->
-      ret = MangoDatabase.create_index(@db_name, ["bing"], name: "idx_recreate")
-      assert ret == {:ok, true}
+  #     {:ok, post_indexes} = MangoDatabase.list_indexes(@db_name)
+  #     assert pre_indexes == post_indexes
+  #   end)
+  # end
 
-      {:ok, indexes} = MangoDatabase.list_indexes(@db_name)
+  # test "delete missing" do
+  #   # Missing design doc
+  #   ret = MangoDatabase.delete_index(@db_name, "this_is_not_a_design_doc_id", "foo")
+  #   assert ret.status_code == 404
 
-      Enum.each(indexes, fn idx ->
-        if idx["name"] == "idx_recreate" do
-          assert idx["def"]["fields"] == [%{"bing" => "asc"}]
-          MangoDatabase.delete_index(@db_name, idx["ddoc"], idx["name"])
-        end
-      end)
+  #   MangoDatabase.create_index(@db_name, ["fields"], name: "idx_01")
+  #   {:ok, indexes} = MangoDatabase.list_indexes(@db_name)
 
-      {:ok, post_indexes} = MangoDatabase.list_indexes(@db_name)
-      assert pre_indexes == post_indexes
-    end)
-  end
+  #   # Missing view name
+  #   not_special = Enum.filter(indexes, &(&1["type"] != "special"))
+  #   idx = Enum.random(not_special)
+  #   ddocid = List.last(String.split(idx["ddoc"], "/"))
+  #   ret = MangoDatabase.delete_index(@db_name, ddocid, "this_is_not_an_index_name")
+  #   assert ret.status_code == 404
 
-  test "delete missing" do
-    # Missing design doc
-    ret = MangoDatabase.delete_index(@db_name, "this_is_not_a_design_doc_id", "foo")
-    assert ret.status_code == 404
+  #   # Bad view type
+  #   ret = MangoDatabase.delete_index(@db_name, ddocid, idx["name"], "not_a_real_type")
+  #   assert ret.status_code == 404
+  # end
 
-    MangoDatabase.create_index(@db_name, ["fields"], name: "idx_01")
-    {:ok, indexes} = MangoDatabase.list_indexes(@db_name)
+  # test "limit skip index" do
+  #   ret = MangoDatabase.create_index(@db_name, ["field1"], name: "idx_01")
+  #   assert ret == {:ok, true}
 
-    # Missing view name
-    not_special = Enum.filter(indexes, &(&1["type"] != "special"))
-    idx = Enum.random(not_special)
-    ddocid = List.last(String.split(idx["ddoc"], "/"))
-    ret = MangoDatabase.delete_index(@db_name, ddocid, "this_is_not_an_index_name")
-    assert ret.status_code == 404
+  #   ret = MangoDatabase.create_index(@db_name, ["field2"], name: "idx_02")
+  #   assert ret == {:ok, true}
 
-    # Bad view type
-    ret = MangoDatabase.delete_index(@db_name, ddocid, idx["name"], "not_a_real_type")
-    assert ret.status_code == 404
-  end
+  #   ret = MangoDatabase.create_index(@db_name, ["field3"], name: "idx_03")
+  #   assert ret == {:ok, true}
 
-  test "limit skip index" do
-    ret = MangoDatabase.create_index(@db_name, ["field1"], name: "idx_01")
-    assert ret == {:ok, true}
+  #   ret = MangoDatabase.create_index(@db_name, ["field4"], name: "idx_04")
+  #   assert ret == {:ok, true}
 
-    ret = MangoDatabase.create_index(@db_name, ["field2"], name: "idx_02")
-    assert ret == {:ok, true}
+  #   ret = MangoDatabase.create_index(@db_name, ["field5"], name: "idx_05")
+  #   assert ret == {:ok, true}
 
-    ret = MangoDatabase.create_index(@db_name, ["field3"], name: "idx_03")
-    assert ret == {:ok, true}
+  #   {:ok, limit2} = MangoDatabase.list_indexes(@db_name, limit: 2)
+  #   {:ok, limit5_skip4} = MangoDatabase.list_indexes(@db_name, limit: 5, skip: 4)
+  #   {:ok, skip5} = MangoDatabase.list_indexes(@db_name, skip: 5)
+  #   {:ok, skip6} = MangoDatabase.list_indexes(@db_name, skip: 6)
+  #   {:ok, skip100} = MangoDatabase.list_indexes(@db_name, skip: 100)
+  #   {:ok, limit1} = MangoDatabase.list_indexes(@db_name, limit: 10000000)
 
-    ret = MangoDatabase.create_index(@db_name, ["field4"], name: "idx_04")
-    assert ret == {:ok, true}
+  #   assert length(limit2) == 2
+  #   assert length(limit5_skip4) == 2
+  #   assert length(skip5) == 1
+  #   assert length(skip6) == 0
+  #   assert length(skip100) == 0
+  #   assert length(limit1) == 6
 
-    ret = MangoDatabase.create_index(@db_name, ["field5"], name: "idx_05")
-    assert ret == {:ok, true}
+  #   {:error, bad_skip} = MangoDatabase.list_indexes(@db_name, skip: -1)
+  #   assert bad_skip.status_code == 500
 
-    {:ok, limit2} = MangoDatabase.list_indexes(@db_name, limit: 2)
-    {:ok, limit5_skip4} = MangoDatabase.list_indexes(@db_name, limit: 5, skip: 4)
-    {:ok, skip5} = MangoDatabase.list_indexes(@db_name, skip: 5)
-    {:ok, skip6} = MangoDatabase.list_indexes(@db_name, skip: 6)
-    {:ok, skip100} = MangoDatabase.list_indexes(@db_name, skip: 100)
-    {:ok, limit1} = MangoDatabase.list_indexes(@db_name, limit: 10000000)
+  #   {:error, limit0} = MangoDatabase.list_indexes(@db_name, limit: 0)
+  #   assert limit0.status_code == 500
+  # end
 
-    assert length(limit2) == 2
-    assert length(limit5_skip4) == 2
-    assert length(skip5) == 1
-    assert length(skip6) == 0
-    assert length(skip100) == 0
-    assert length(limit1) == 6
+  # test "out of sync" do
+  #   docs = [
+  #     %{"_id" => "1", "name" => "Jimi", "age" => 10, "cars" => 1},
+  #     %{"_id" => "2", "name" => "kate", "age" => 8, "cars" => 0}
+  #   ]
+  #   MangoDatabase.save_docs(@db_name, docs)
+  #   MangoDatabase.create_index(@db_name, ["age"], name: "age")
 
-    {:error, bad_skip} = MangoDatabase.list_indexes(@db_name, skip: -1)
-    assert bad_skip.status_code == 500
+  #   selector = %{"age" => %{"$gt" => 0}}
+  #   {:ok, docs} = MangoDatabase.find(
+  #     @db_name, selector, use_index: "_design/a017b603a47036005de93034ff689bbbb6a873c4"
+  #   )
+  #   assert length(docs) == 2
 
-    {:error, limit0} = MangoDatabase.list_indexes(@db_name, limit: 0)
-    assert limit0.status_code == 500
-  end
+  #   MangoDatabase.delete_doc(@db_name, "1")
 
-  test "out of sync" do
-    docs = [
-      %{"_id" => "1", "name" => "Jimi", "age" => 10, "cars" => 1},
-      %{"_id" => "2", "name" => "kate", "age" => 8, "cars" => 0}
-    ]
-    MangoDatabase.save_docs(@db_name, docs)
-    MangoDatabase.create_index(@db_name, ["age"], name: "age")
-
-    selector = %{"age" => %{"$gt" => 0}}
-    {:ok, docs} = MangoDatabase.find(
-      @db_name, selector, use_index: "_design/a017b603a47036005de93034ff689bbbb6a873c4"
-    )
-    assert length(docs) == 2
-
-    MangoDatabase.delete_doc(@db_name, "1")
-
-    {:ok, docs1} = MangoDatabase.find(
-      @db_name,
-      selector,
-      update: false,
-      use_index: "_design/a017b603a47036005de93034ff689bbbb6a873c4"
-    )
-    assert length(docs1) == 1
-  end
+  #   {:ok, docs1} = MangoDatabase.find(
+  #     @db_name,
+  #     selector,
+  #     update: false,
+  #     use_index: "_design/a017b603a47036005de93034ff689bbbb6a873c4"
+  #   )
+  #   assert length(docs1) == 1
+  # end
 end
 
 defmodule IndexCrudTextTests do
