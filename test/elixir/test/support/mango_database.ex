@@ -90,8 +90,11 @@ defmodule MangoDatabase do
     |> put_if_set("ddoc", options, :ddoc)
 
     resp = Couch.post("/#{db}/_index", body: body)
-
-    {:ok, resp.body["result"] == "created"}
+    if resp.status_code == 200 do
+      {:ok, resp.body["result"] == "created"}
+    else
+      {:error, resp}
+    end
   end
 
   def create_text_index(db, options \\ []) do
@@ -113,6 +116,12 @@ defmodule MangoDatabase do
 
     resp = Couch.post("/#{db}/_index", body: body)
 
+    if resp.status_code == 200 do
+      {:ok, resp.body["result"] == "created"}
+    else
+      {:error, resp}
+    end
+  end
 
   def list_indexes(db, opts \\ []) do
     limit = Keyword.get(opts, :limit)
