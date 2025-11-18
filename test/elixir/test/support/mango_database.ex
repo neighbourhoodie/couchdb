@@ -38,6 +38,15 @@ defmodule MangoDatabase do
     Couch.delete("/#{db}")
   end
 
+  def save_doc(db, doc, opts \\ []) do
+    MangoDatabase.save_docs(db, [doc], opts)
+  end
+
+  def save_docs_with_conflicts(db, docs) do
+    body = %{"docs" => docs, "new_edits": false}
+    Couch.post("/#{db}/_bulk_docs", body: body)
+  end
+
   # TODO: make this use batches if necessary
   def save_docs(db, docs, opts \\ []) do
     query = %{}
