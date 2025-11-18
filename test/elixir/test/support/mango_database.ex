@@ -38,9 +38,13 @@ defmodule MangoDatabase do
     Couch.delete("/#{db}")
   end
 
-  # TODO: make this use batches if necessary
-  def save_docs(db, docs) do
-    resp = Couch.post("/#{db}/_bulk_docs", body: %{"docs" => docs})
+  def save_doc(db, doc, opts \\ []) do
+    MangoDatabase.save_docs(db, [doc], opts)
+  end
+
+  def save_docs_with_conflicts(db, docs) do
+    body = %{"docs" => docs, "new_edits" => false}
+    Couch.post("/#{db}/_bulk_docs", body: body)
   end
 
   # If a certain keyword like sort or field is passed in the options,
@@ -50,6 +54,32 @@ defmodule MangoDatabase do
       Map.put(map, key, opts[opts_key])
     else
       map
+    end
+  end
+
+  # TODO: make this use batches if necessary
+  def save_docs(db, docs, opts \\ []) do
+    query = %{}
+    |> put_if_set("w", opts, :w)
+
+    result = Couch.post("/#{db}/_bulk_docs", body: %{"docs" => docs}, query: query)
+    zipped_docs = Enum.zip(docs, result.body)
+
+    # This returns the doc list including _id and _rev values
+    resp = Enum.map(zipped_docs, fn {doc, result} ->
+      doc
+      |> Map.put("_id", result["id"])
+      |> Map.put("_rev", result["rev"])
+    end)
+
+    # _bulk_docs sometimes returns errors in the body and this is captured here
+    errors = Enum.filter(result.body, fn r ->
+      Map.has_key?(r, "error")
+    end)
+    if errors == [] do
+      resp
+    else
+      {:error, errors}
     end
   end
 

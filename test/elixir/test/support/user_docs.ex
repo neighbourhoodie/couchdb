@@ -391,7 +391,7 @@ defmodule UserDocs do
     ]
 
     Enum.each(indexes, fn {idx, name} ->
-      MangoDatabase.create_index(db, idx, name: name)
+      MangoDatabase.create_index(db, idx, name: name, ddoc: name)
     end)
   end
 
