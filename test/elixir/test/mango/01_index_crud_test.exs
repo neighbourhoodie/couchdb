@@ -97,61 +97,59 @@ defmodule IndexCrudTests do
     end)
   end
 
-  #  TODO
-  defp all_methods(sess) do
-  [
-    {"PUT",    &Couch.session.put(sess)},
-    {"GET",    &Couch.session.get(sess)},
-    {"POST",   &Couch.session.post(sess)},
-    {"PATCH",  &Couch.session.patch(sess)},
-    {"DELETE", &Couch.session.delete(sess)},
-    {"HEAD",   &Couch.session.head(sess)},
+  defp all_but(method, methods) do
+    Enum.reject(methods, fn {m, _} -> m == method end)
+  end
 
-    # Python’s partial(self.db.sess.request, "COPY")
-    {"COPY",    fn url -> Couch.session.request(sess, "COPY", url) end},
-    {"OPTIONS", fn url -> Couch.session.request(sess, "OPTIONS", url) end},
-    {"TRACE",   fn url -> Couch.session.request(sess, "TRACE", url) end},
-    {"CONNECT", fn url -> Couch.session.request(sess, "CONNECT", url) end}
-  ]
-end
-  # defp all_but(method) do
-  #   Enum.reject(all_methods(), fn {m, _} -> m == method end)
-  # end
-
-###############################################################
-# TODO
-###############################################################
   test "bad urls" do
     # These are only the negative test cases because ideally the
     # positive ones are implicitly tested by other ones.
 
-    sess = MangoDatabase.get_session()
-    IO.inspect(sess)
-    methods = all_methods(sess)
+    all_methods = [
+      {"PUT",    fn path -> Couch.put(path) end},
+      {"GET",    fn path -> Couch.get(path) end},
+      {"POST",   fn path -> Couch.post(path) end},
+      {"PATCH",  fn path -> Couch.patch(path) end},
+      {"DELETE", fn path -> Couch.delete(path) end},
+      {"HEAD",   fn path -> Couch.head(path) end},
+      # {"COPY",    fn path -> Couch.request("COPY", path) end},
+      # {"OPTIONS", fn path -> Couch.request("OPTIONS", path) end},
+      # {"TRACE",   fn path -> Couch.request("TRACE", path) end},
+      # {"CONNECT", fn path -> Couch.request("CONNECT", path) end}
+    ]
 
     # These are only the negative test cases.
     subpaths = ["a", "a/b", "a/b/c/d", "a/b/c/d/e", "a/b/c/d/e/f"]
     Enum.each(subpaths, fn subpath ->
       path = MangoDatabase.path(@db_name, "_index/#{subpath}")
-      IO.inspect(path)
-      Enum.each(methods, fn {method_name, method} ->
+      Enum.each(all_methods, fn {_, method} ->
         response = method.(path)
         assert response.status_code == 404
       end)
     end)
 
-    # _bulk_delete should reject everything except POST
-    # path = MangoDatabase.path("_index/_bulk_delete")
-    # Enum.each(all_but("POST"), fn {method_name, method} ->
-    #   response = call(method, path)
-    #   assert response.status_code == 405
-    # end)
+    path = MangoDatabase.path(@db_name, "_index/_bulk_delete")
+    Enum.each(all_but("POST", all_methods), fn {_, method} ->
+      response = method.(path)
+      assert response.status_code == 405
+    end)
 
-    # Index delete tests
     fields = ["foo", "bar"]
     ddoc = "dd"
     idx = "idx_01"
-    assert MangoDatabase.create_index(@db_name, fields, name: idx, ddoc: ddoc)
+    {:ok, ret} = MangoDatabase.create_index(@db_name, fields, name: idx, ddoc: ddoc)
+    assert ret == true
+
+    subpaths = ["#{ddoc}/json/#{idx}", "_design/#{ddoc}/json/#{idx}"]
+    Enum.each(subpaths, fn subpath ->
+      path = MangoDatabase.path(@db_name, "_index/#{subpath}")
+
+      Enum.each(all_but("DELETE", all_methods), fn {method_name, method} ->
+        response = method.(path)
+        assert response.status_code == 405,
+              "Expected 405 for #{method_name} on path #{path}"
+      end)
+    end)
   end
 
   test "create idx 01" do
@@ -351,13 +349,13 @@ end
     {:ok, skip5} = MangoDatabase.list_indexes(@db_name, skip: 5)
     {:ok, skip6} = MangoDatabase.list_indexes(@db_name, skip: 6)
     {:ok, skip100} = MangoDatabase.list_indexes(@db_name, skip: 100)
-    {:ok, limit1} = MangoDatabase.list_indexes(@db_name, limit: 10000000)
+    {:ok, limit1} = MangoDatabase.list_indexes(@db_name, limit: 10_000_000)
 
     assert length(limit2) == 2
     assert length(limit5_skip4) == 2
     assert length(skip5) == 1
-    assert length(skip6) == 0
-    assert length(skip100) == 0
+    assert Enum.empty?(skip6)
+    assert Enum.empty?(skip100)
     assert length(limit1) == 6
 
     {:error, bad_skip} = MangoDatabase.list_indexes(@db_name, skip: -1)
@@ -467,13 +465,13 @@ defmodule IndexCrudTextTests do
     {:ok, skip5} = MangoDatabase.list_indexes(@db_name, skip: 5)
     {:ok, skip6} = MangoDatabase.list_indexes(@db_name, skip: 6)
     {:ok, skip100} = MangoDatabase.list_indexes(@db_name, skip: 100)
-    {:ok, limit1} = MangoDatabase.list_indexes(@db_name, limit: 10000000)
+    {:ok, limit1} = MangoDatabase.list_indexes(@db_name, limit: 10_000_000)
 
     assert length(limit2) == 2
     assert length(limit5_skip4) == 2
     assert length(skip5) == 1
-    assert length(skip6) == 0
-    assert length(skip100) == 0
+    assert Enum.empty?(skip6)
+    assert Enum.empty?(skip100)
     assert length(limit1) == 6
 
     {:error, bad_skip} = MangoDatabase.list_indexes(@db_name, skip: -1)
