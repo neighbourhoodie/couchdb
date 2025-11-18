@@ -358,6 +358,7 @@ defmodule UserDocs do
     case index_type do
       "view" -> add_view_indexes(db)
       "text" -> add_text_indexes(db)
+      "special" -> :ok
     end
 
     :ok
