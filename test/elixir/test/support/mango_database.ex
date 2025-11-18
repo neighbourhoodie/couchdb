@@ -39,8 +39,19 @@ defmodule MangoDatabase do
   end
 
   # TODO: make this use batches if necessary
-  def save_docs(db, docs) do
-    resp = Couch.post("/#{db}/_bulk_docs", body: %{"docs" => docs})
+  def save_docs(db, docs, opts \\ []) do
+    query = %{}
+    |> put_if_set("w", opts, :w)
+
+    result = Couch.post("/#{db}/_bulk_docs", body: %{"docs" => docs}, query: query)
+    zipped_docs = Enum.zip(docs, result.body)
+
+    # This returns the doc list including _id and _rev values
+    Enum.map(zipped_docs, fn {doc, result} ->
+      doc
+      |> Map.put("_id", result["id"])
+      |> Map.put("_rev", result["rev"])
+    end)
   end
 
   # If a certain keyword like sort or field is passed in the options,
