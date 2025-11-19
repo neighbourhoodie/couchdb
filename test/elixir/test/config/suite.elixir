@@ -734,5 +734,8 @@
   ],
   "IgnoreDesignDocsForAllDocsIndexTests": [
     "should not return design docs"
+  ],
+  "LongRunningMangoTest": [
+    "query does not time out"
   ]
 }
