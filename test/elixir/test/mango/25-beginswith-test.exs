@@ -130,7 +130,7 @@ defmodule BeginsWithOperator do
 
   test "no matches" do
     {:ok, docs} = MangoDatabase.find(@db_name, %{"name" => %{"$beginsWith" => "Z"}})
-    assert length(docs) == 0
+    assert Enum.empty?(docs)
   end
 
   test "case sensitivity" do
