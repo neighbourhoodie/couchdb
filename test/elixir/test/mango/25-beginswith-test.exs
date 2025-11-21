@@ -140,5 +140,5 @@ defmodule BeginsWithOperator do
     {:ok, docs} = MangoDatabase.find(@db_name, %{"name" => %{"$beginsWith" => "J"}})
     assert length(docs) == 2
   end
-
 end
+
