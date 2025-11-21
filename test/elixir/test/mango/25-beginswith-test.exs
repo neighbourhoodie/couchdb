@@ -43,7 +43,7 @@ defmodule BeginsWithOperator do
     explain["mrargs"]
   end
 
-  defp assertDocIds(user_ids, docs) do
+  defp assert_doc_ids(user_ids, docs) do
     user_ids_returned =
       docs
       |> Enum.map(fn d -> d["_id"] end)
@@ -54,7 +54,7 @@ defmodule BeginsWithOperator do
   test "basic" do
     {:ok, docs} = MangoDatabase.find(@db_name, %{"location" => %{"$beginsWith" => "A"}})
     assert length(docs) == 2
-    assertDocIds(["aaa", "abc"], docs)
+    assert_doc_ids(["aaa", "abc"], docs)
   end
 
   test "json range" do
@@ -71,7 +71,7 @@ defmodule BeginsWithOperator do
 
     {:ok, docs} = MangoDatabase.find(@db_name, selector)
     assert length(docs) == 1
-    assertDocIds(["abc"], docs)
+    assert_doc_ids(["abc"], docs)
   end
 
   test "sort" do
@@ -125,7 +125,7 @@ defmodule BeginsWithOperator do
 
   test "does not match non string value" do
     {:ok, docs} = MangoDatabase.find(@db_name, %{"age" => %{"$beginsWith" => "a"}})
-    assert length(docs) == 0
+    assert Enum.empty?(docs)
   end
 
   test "no matches" do
@@ -141,4 +141,3 @@ defmodule BeginsWithOperator do
     assert length(docs) == 2
   end
 end
-
