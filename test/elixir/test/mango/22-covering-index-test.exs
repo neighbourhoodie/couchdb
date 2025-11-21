@@ -15,17 +15,17 @@ defmodule CoveringIndexTest do
   defmacro describe(db) do
     quote do
       test "index covers query 1 field index id" do
-        is_covered(unquote(db), %{"age" => %{"$gte" => 32}}, ["_id"], "age")
+        covered?(unquote(db), %{"age" => %{"$gte" => 32}}, ["_id"], "age")
       end
 
       test "index covers query 2 field index id" do
-        is_covered(
+        covered?(
           unquote(db), %{"company" => "Lyria", "manager" => true}, ["_id"], "company_and_manager"
         )
       end
 
       test "index covers query 2 field index extract field" do
-        is_covered(
+        covered?(
           unquote(db),
           %{"company" => %{"$exists" => true}, "manager" => true},
           ["company"],
@@ -34,7 +34,7 @@ defmodule CoveringIndexTest do
       end
 
       test "index covers query 2 field index extract field force index" do
-        is_covered(
+        covered?(
           unquote(db),
           %{"company" => %{"$exists" => true}, "manager" => true},
           ["company"],
@@ -44,39 +44,39 @@ defmodule CoveringIndexTest do
       end
 
       test "index covers query elemMatch" do
-        is_covered(
+        covered?(
           unquote(db), %{"favorites" => %{"$elemMatch" => %{"$eq" => "Erlang"}}}, ["favorites"], "favorites"
         )
       end
 
       test "index covers query composite field_id" do
-        is_covered(
+        covered?(
           unquote(db), %{"name" => %{"first" => "Stephanie", "last" => "Kirkland"}}, ["_id"], "name"
         )
       end
 
       test "index does not cover query empty selector" do
-        is_not_covered(unquote(db), %{}, ["_id"])
+        not_covered?(unquote(db), %{}, ["_id"])
       end
 
       test "index does not cover query field not in index" do
-        is_not_covered(unquote(db), %{"age" => %{"$gte" => 32}}, ["name"])
+        not_covered?(unquote(db), %{"age" => %{"$gte" => 32}}, ["name"])
       end
 
       test "index does not cover query all fields" do
-        is_not_covered(unquote(db), %{"age" => %{"$gte" => 32}}, [])
+        not_covered?(unquote(db), %{"age" => %{"$gte" => 32}}, [])
       end
 
       test "index does not cover query partial selector id" do
-        is_not_covered(unquote(db), %{"location.state" => "Nevada"}, ["_id"])
+        not_covered?(unquote(db), %{"location.state" => "Nevada"}, ["_id"])
       end
 
       test "index does not cover query partial selector" do
-        is_not_covered(unquote(db), %{"name.last" => "Hernandez"}, ["name.first"])
+        not_covered?(unquote(db), %{"name.last" => "Hernandez"}, ["name.first"])
       end
 
       test "index does not cover selector with more fields" do
-        is_not_covered(
+        not_covered?(
           unquote(db),
           %{
             "$and" => [
@@ -104,7 +104,7 @@ defmodule RegularCoveringIndexTest do
     UserDocs.setup(@db_name)
   end
 
-  def is_covered(db, selector, fields, index, opts \\ []) do
+  def covered?(db, selector, fields, index, opts \\ []) do
     use_index = Keyword.get(opts, :use_index, nil)
     {:ok, resp} = MangoDatabase.find(db, selector, fields: fields, use_index: use_index, explain: true)
 
@@ -114,7 +114,7 @@ defmodule RegularCoveringIndexTest do
     assert resp["covering"] == true
   end
 
-  def is_not_covered(db, selector, fields, opts \\ []) do
+  def not_covered?(db, selector, fields, opts \\ []) do
     use_index = Keyword.get(opts, :use_index, nil)
     {:ok, resp} = MangoDatabase.find(db, selector, fields: fields, use_index: use_index, explain: true)
 
@@ -178,7 +178,7 @@ defmodule PartitionedCoveringIndexTest do
     UserDocs.setup(@db_name, "view", true)
   end
 
-  def is_covered(db, selector, fields, index, opts \\ []) do
+  def covered?(db, selector, fields, index, opts \\ []) do
     use_index = Keyword.get(opts, :use_index, nil)
     {:ok, resp} = MangoDatabase.find(db, selector, fields: fields, use_index: use_index, explain: true, partition: "0")
 
@@ -188,7 +188,7 @@ defmodule PartitionedCoveringIndexTest do
     assert resp["covering"] == true
   end
 
-  def is_not_covered(db, selector, fields, opts \\ []) do
+  def not_covered?(db, selector, fields, opts \\ []) do
     use_index = Keyword.get(opts, :use_index, nil)
     {:ok, resp} = MangoDatabase.find(db, selector, fields: fields, use_index: use_index, explain: true, partition: "0")
 
