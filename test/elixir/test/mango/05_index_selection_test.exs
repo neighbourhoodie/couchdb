@@ -12,286 +12,275 @@
 
 defmodule IndexSelectionTest do
   use CouchTestCase
+  defmacro describe(db) do
+    quote do
+      test "basic" do
+        {:ok, resp} = MangoDatabase.find(unquote(db), %{"age" => 123}, explain: true)
+        assert resp["index"]["type"] == "json"
+      end
 
-  @db_name "index-selection"
+      test "with and" do
+        {:ok, resp} = MangoDatabase.find(unquote(db),
+          %{
+            "name.first" => "Stephanie",
+            "name.last" => "This doesn't have to match anything.",
+          },
+          explain: true
+        )
+        assert resp["index"]["type"] == "json"
+      end
 
-  setup do
-    UserDocs.setup(@db_name)
-  end
+      test "with nested and" do
+        {:ok, resp} = MangoDatabase.find(unquote(db),
+          %{
+            "name.first" => %{"$gt" => "a", "$lt" => "z"},
+            "name.last" => "Foo"
+          },
+          explain: true
+        )
+        assert resp["index"]["type"] == "json"
+      end
 
-  test "basic" do
-    {:ok, resp} = MangoDatabase.find(@db_name, %{"age" => 123}, explain: true)
-    assert resp["index"]["type"] == "json"
-  end
+      test "with or" do
+        ddocid = "_design/company_and_manager"
+        {:ok, resp} = MangoDatabase.find(unquote(db),
+          %{
+            "company" => %{"$gt" => "a", "$lt" => "z"},
+            "$or" => [%{"manager" => "Foo"}, %{"manager" => "Bar"}],
+          },
+          explain: true
+        )
+        assert resp["index"]["ddoc"] == ddocid
+      end
 
-  test "with and" do
-    {:ok, resp} = MangoDatabase.find(@db_name,
-      %{
-        "name.first" => "Stephanie",
-        "name.last" => "This doesn't have to match anything.",
-      },
-      explain: true
-    )
-    assert resp["index"]["type"] == "json"
-  end
+      test "use most columns" do
+        ddocid = "_design/age"
+        {:ok, resp} = MangoDatabase.find(unquote(db),
+          %{
+            "name.first" =>"Stephanie",
+            "name.last" => "Something or other",
+            "age" => %{"$gt" => 1},
+          },
+          explain: true
+        )
+        assert resp["index"]["ddoc"] != ddocid
 
-  test "with nested and" do
-    {:ok, resp} = MangoDatabase.find(@db_name,
-      %{
-        "name.first" => %{"$gt" => "a", "$lt" => "z"},
-        "name.last" => "Foo"
-      },
-      explain: true
-    )
-    assert resp["index"]["type"] == "json"
-  end
+        {:ok, resp} = MangoDatabase.find(unquote(db),
+          %{
+            "name.first" => "Stephanie",
+            "name.last" => "Something or other",
+            "age" => %{"$gt" => 1},
+          },
+          use_index: ddocid,
+          explain: true
+        )
+        assert resp["index"]["ddoc"] == ddocid
+      end
 
-  test "with or" do
-    ddocid = "_design/company_and_manager"
-    {:ok, resp} = MangoDatabase.find(@db_name,
-      %{
-        "company" => %{"$gt" => "a", "$lt" => "z"},
-        "$or": [%{"manager" => "Foo"}, %{"manager" => "Bar"}],
-      },
-      explain: true
-    )
-    assert resp["index"]["ddoc"] == ddocid
-  end
+      test "no valid sort index" do
+        {:error, resp} = MangoDatabase.find(unquote(db),
+          %{
+            "_id" => %{"$gt" => nil}
+          },
+          sort: ["name"],
+          return_raw: true
+        )
+        assert resp.status_code == 400
+      end
 
-  test "use most columns" do
-    ddocid = "_design/age"
-    {:ok, resp} = MangoDatabase.find(@db_name,
-      %{
-        "name.first" =>"Stephanie",
-        "name.last" => "Something or other",
-        age: %{"$gt" => 1},
-      },
-      explain: true
-    )
-    assert resp["index"]["ddoc"] != ddocid
+      test "invalid use index" do
+        # ddoc id for the age index
+        ddocid = "_design/age"
+        {:ok, r} = MangoDatabase.find(unquote(db), %{}, use_index: ddocid, return_raw: true)
+        result =
+          r["warning"]
+          |> String.split("\n")
+          |> Enum.at(0)
+          |> String.downcase()
+        expected = "#{ddocid} was not used because it does not contain a valid index for this query."
+        assert result == expected
+      end
 
-    {:ok, resp} = MangoDatabase.find(@db_name,
-      %{
-        "name.first" => "Stephanie",
-        "name.last" => "Something or other",
-        age: %{"$gt" => 1},
-      },
-      use_index: ddocid,
-      explain: true
-    )
-    assert resp["index"]["ddoc"] == ddocid
-  end
+      test "uses index when no range or equals" do
+        # index on ["manager"] should be valid because
+        # selector requires "manager" to exist. The
+        # selector doesn't narrow the keyrange so it's
+        # a full index scan
+        selector = %{"manager" => %{"$exists" => true}}
+        {:ok, docs} = MangoDatabase.find(unquote(db), selector)
+        assert length(docs) == 14
 
-  test "no valid sort index" do
-    {:error, resp} = MangoDatabase.find(@db_name,
-      %{
-        "_id" => %{"$gt" => nil}
-      },
-      sort: ["name"],
-      return_raw: true
-    )
-    assert resp.status_code == 400
-  end
+        {:ok, resp_explain} = MangoDatabase.find(unquote(db), selector, explain: true)
+        assert resp_explain["index"]["type"] == "json"
+      end
 
-  test "invalid use index" do
-    # ddoc id for the age index
-    ddocid = "_design/age"
-    {:ok, r} = MangoDatabase.find(@db_name, %{}, use_index: ddocid, return_raw: true)
-    result =
-      r["warning"]
-      |> String.split("\n")
-      |> Enum.at(0)
-      |> String.downcase()
-    expected = "#{ddocid} was not used because it does not contain a valid index for this query."
-    assert result == expected
-  end
+      test "reject use index invalid fields" do
+        ddocid = "_design/company_and_manager"
+        selector = %{"company" => "Pharmex"}
+        {:ok, r} = MangoDatabase.find(unquote(db), selector, use_index: ddocid, return_raw: true)
+        result =
+          r["warning"]
+          |> String.split("\n")
+          |> Enum.at(0)
+          |> String.downcase()
+        expected = "#{ddocid} was not used because it does not contain a valid index for this query."
+        assert result == expected
 
-  test "uses index when no range or equals" do
-    # index on ["manager"] should be valid because
-    # selector requires "manager" to exist. The
-    # selector doesn't narrow the keyrange so it's
-    # a full index scan
-    selector = %{"manager" => %{"$exists" => true}}
-    {:ok, docs} = MangoDatabase.find(@db_name, selector)
-    assert length(docs) == 14
+        # should still return a correct result
+        assert Enum.empty?(r["docs"]) == false
+        Enum.each(r["docs"], fn d ->
+          assert d["company"] == "Pharmex"
+        end)
+      end
 
-    {:ok, resp_explain} = MangoDatabase.find(@db_name, selector, explain: true)
-    assert resp_explain["index"]["type"] == "json"
-  end
+      test "reject use index ddoc and name invalid fields" do
+        ddocid = "_design/company_and_manager"
+        name = "company_and_manager"
+        selector = %{"company" => "Pharmex"}
 
-  test "reject use index invalid fields" do
-    ddocid = "_design/company_and_manager"
-    selector = %{"company" => "Pharmex"}
-    {:ok, r} = MangoDatabase.find(@db_name, selector, use_index: ddocid, return_raw: true)
-    result =
-      r["warning"]
-      |> String.split("\n")
-      |> Enum.at(0)
-      |> String.downcase()
-    expected = "#{ddocid} was not used because it does not contain a valid index for this query."
-    assert result == expected
+        {:ok, resp} = MangoDatabase.find(unquote(db), selector, use_index: [ddocid, name], return_raw: true)
+        result =
+          resp["warning"]
+          |> String.split("\n")
+          |> Enum.at(0)
+          |> String.downcase()
+        expected = "#{ddocid}, #{name} was not used because it is not a valid index for this query."
+        assert result == expected
 
-    # should still return a correct result
-    Enum.each(r["docs"], fn d ->
-      assert d["company"] == "Pharmex"
-    end)
-  end
+        # should still return a correct result
+        Enum.each(resp["docs"], fn d ->
+          assert d["company"] == "Pharmex"
+        end)
+      end
 
-  test "reject use index ddoc and name invalid fields" do
-    ddocid = "_design/company_and_manager"
-    name = "company_and_manager"
-    selector = %{"company" => "Pharmex"}
+      test "reject use index sort order" do
+        # index on ["company","manager"] which should not be valid
+        # and there is no valid fallback (i.e. an index on ["company"])
+        ddocid = "_design/company_and_manager"
+        selector = %{"company" => %{"$gt" => nil}}
+        {:error, resp} = MangoDatabase.find(unquote(db), selector, use_index: ddocid, sort: [%{"company" => "desc"}])
+        assert resp.status_code == 400
+      end
 
-    {:ok, resp} = MangoDatabase.find(@db_name, selector, use_index: [ddocid, name], return_raw: true)
-    result =
-      resp["warning"]
-      |> String.split("\n")
-      |> Enum.at(0)
-      |> String.downcase()
-    expected = "#{ddocid}, #{name} was not used because it is not a valid index for this query."
-    assert result == expected
+      test "use index fallback if valid sort" do
+        ddocid_valid = "_design/fallbackfoo"
+        ddocid_invalid = "_design/fallbackfoobar"
+        MangoDatabase.create_index(unquote(db), ["foo"], ddoc: ddocid_invalid)
+        MangoDatabase.create_index(unquote(db), ["foo", "bar"], ddoc: ddocid_valid)
+        selector = %{"foo" => %{"$gt" => nil}}
 
-    # should still return a correct result
-    Enum.each(resp["docs"], fn d ->
-      assert d["company"] == "Pharmex"
-    end)
-  end
+        {:ok, resp_explain} = MangoDatabase.find(unquote(db), selector, sort: ["foo", "bar"], use_index: ddocid_invalid, explain: true)
+        assert resp_explain["index"]["ddoc"] == ddocid_valid
 
-  test "reject use index sort order" do
-    # index on ["company","manager"] which should not be valid
-    # and there is no valid fallback (i.e. an index on ["company"])
-    ddocid = "_design/company_and_manager"
-    selector = %{"company" => %{"$gt" => nil}}
-    {:error, resp} = MangoDatabase.find(@db_name, selector, use_index: ddocid, sort: [%{"company" => "desc"}])
-    assert resp.status_code == 400
-  end
+        {:ok, resp} = MangoDatabase.find(unquote(db), selector, sort: ["foo", "bar"], use_index: ddocid_invalid, return_raw: true)
+        result =
+          resp["warning"]
+          |> String.split("\n")
+          |> Enum.at(0)
+          |> String.downcase()
+        expected = "#{ddocid_invalid} was not used because it does not contain a valid index for this query."
+        assert result == expected
+        assert Enum.empty?(resp["docs"])
+      end
 
-  test "use index fallback if valid sort" do
-    ddocid_valid = "_design/fallbackfoo"
-    ddocid_invalid = "_design/fallbackfoobar"
-    MangoDatabase.create_index(@db_name, ["foo"], ddoc: ddocid_invalid)
-    MangoDatabase.create_index(@db_name, ["foo", "bar"], ddoc: ddocid_valid)
-    selector = %{"foo": %{"$gt" => nil}}
+      test "prefer use index over optimal index" do
+        # index on ["company"] even though index on ["company", "manager"] is better
+        ddocid_preferred = "_design/testsuboptimal"
+        MangoDatabase.create_index(unquote(db), ["baz"], ddoc: ddocid_preferred)
+        MangoDatabase.create_index(unquote(db), ["baz", "bar"])
+        selector = %{"baz" => %{"$gt" => nil}, "bar" => %{"$gt" => nil}}
+        {:ok, resp} = MangoDatabase.find(unquote(db), selector, use_index: ddocid_preferred, return_raw: true)
+        assert not Map.has_key?(resp, "warning")
 
-    {:ok, resp_explain} = MangoDatabase.find(@db_name, selector, sort: ["foo", "bar"], use_index: ddocid_invalid, explain: true)
-    assert resp_explain["index"]["ddoc"] == ddocid_valid
+        {:ok, resp_explain} = MangoDatabase.find(unquote(db), selector, use_index: ddocid_preferred, explain: true)
+        assert resp_explain["index"]["ddoc"] == ddocid_preferred
+      end
 
-    {:ok, resp} = MangoDatabase.find(@db_name, selector, sort: ["foo", "bar"], use_index: ddocid_invalid, return_raw: true)
-    result =
-      resp["warning"]
-      |> String.split("\n")
-      |> Enum.at(0)
-      |> String.downcase()
-    expected = "#{ddocid_invalid} was not used because it does not contain a valid index for this query."
-    assert result == expected
-    assert Enum.empty?(resp["docs"])
-  end
-
-  test "prefer use index over optimal index" do
-    # index on ["company"] even though index on ["company", "manager"] is better
-    ddocid_preferred = "_design/testsuboptimal"
-    MangoDatabase.create_index(@db_name, ["baz"], ddoc: ddocid_preferred)
-    MangoDatabase.create_index(@db_name, ["baz", "bar"])
-    selector = %{"baz" => %{"$gt" => nil}, "bar" => %{"$gt" => nil}}
-    {:ok, resp} = MangoDatabase.find(@db_name, selector, use_index: ddocid_preferred, return_raw: true)
-    assert not Map.has_key?(resp, "warning")
-
-    {:ok, resp_explain} = MangoDatabase.find(@db_name, selector, use_index: ddocid_preferred, explain: true)
-    assert resp_explain["index"]["ddoc"] == ddocid_preferred
-  end
-
-  # This doc will not be saved given the new ddoc validation code
-  # in couch_mrview
-  test "manual bad view idx01" do
-    design_doc = %{
-      "_id" => "_design/bad_view_index",
-      "language" => "query",
-      "views" => %{
-        "queryidx1" => %{
-          "map" => %{"fields" => %{"age" => "asc"}},
-          "reduce" => "_count",
-          "options" => %{"def" => %{"fields" => [%{"age" => "asc"}]}, "w" => 2},
+      # This doc will not be saved given the new ddoc validation code
+      # in couch_mrview
+      test "manual bad view idx01" do
+        design_doc = %{
+          "_id" => "_design/bad_view_index",
+          "language" => "query",
+          "views" => %{
+            "queryidx1" => %{
+              "map" => %{"fields" => %{"age" => "asc"}},
+              "reduce" => "_count",
+              "options" => %{"def" => %{"fields" => [%{"age" => "asc"}]}, "w" => 2},
+            }
+          },
+          "views" => %{
+            "views001" => %{
+              "map" => "function(employee){if(employee.training)"
+              <> "{emit(employee.number, employee.training);}}"
+            }
+          },
         }
-      },
-      "views" => %{
-        "views001" => %{
-          "map" => "function(employee){if(employee.training)"
-          <> "{emit(employee.number, employee.training);}}"
-        }
-      },
-    }
-    assert {:error, _} = MangoDatabase.save_docs(@db_name, [design_doc])
-  end
+        assert {:error, _} = MangoDatabase.save_docs(unquote(db), [design_doc])
+      end
 
-  test "explain sort reverse" do
-    selector = %{"manager" => %{"$gt" => nil}}
-    {:ok, resp_explain} = MangoDatabase.find(@db_name, selector, fields: ["manager"], sort: [%{"manager" => "desc"}], explain: true)
-    assert resp_explain["index"]["type"] == "json"
-  end
+      test "explain sort reverse" do
+        selector = %{"manager" => %{"$gt" => nil}}
+        {:ok, resp_explain} = MangoDatabase.find(unquote(db), selector, fields: ["manager"], sort: [%{"manager" => "desc"}], explain: true)
+        assert resp_explain["index"]["type"] == "json"
+      end
 
-  test "use index with invalid name" do
-    Enum.each(["foo/bar/baz", ["foo", "bar", "baz"]], fn index ->
-      {:error, resp} = MangoDatabase.find(@db_name, %{"manager" => true}, use_index: index)
-      assert resp.status_code == 400
-    end)
-  end
+      test "use index with invalid name" do
+        Enum.each(["foo/bar/baz", ["foo", "bar", "baz"]], fn index ->
+          {:error, resp} = MangoDatabase.find(unquote(db), %{"manager" => true}, use_index: index)
+          assert resp.status_code == 400
+        end)
+      end
 
-  test "use index without fallback succeeds for valid index" do
-    {:ok, docs} = MangoDatabase.find(@db_name, %{"manager" => true}, use_index: "manager", allow_fallback: false)
-    assert length(docs) > 0
-  end
+      test "use index without fallback succeeds for valid index" do
+        {:ok, docs} = MangoDatabase.find(unquote(db), %{"manager" => true}, use_index: "manager", allow_fallback: false)
+        assert length(docs) > 0
+      end
 
-  test "use index without fallback fails for invalid index with fallback available" do
-    case MangoDatabase.find(@db_name, %{"manager" => true}, use_index: "invalid", allow_fallback: false) do
-      {:ok, _} -> assert flunk("did not fail on invalid index for use_index")
-      {:error, resp} -> assert resp.status_code == 400
-    end
-  end
+      test "use index without fallback fails for invalid index with fallback available" do
+        {:error, resp} = MangoDatabase.find(unquote(db), %{"manager" => true}, use_index: "invalid", allow_fallback: false)
+        assert resp.status_code == 400
+      end
 
-  test "use index without fallback succeeds for empty index" do
-    case MangoDatabase.find(@db_name, %{"manager" => true}, use_index: [], allow_fallback: false) do
-      {:ok, docs} -> assert length(docs) > 0
-      {:error, _} -> assert flunk("fail due to missing use_index with suitable indexes")
-    end
-  end
+      test "use index without fallback succeeds for empty index" do
+        {:ok, docs} = MangoDatabase.find(unquote(db), %{"manager" => true}, use_index: [], allow_fallback: false)
+        assert length(docs) > 0
+      end
 
-  test "use index without fallback fails for empty index" do
-    case MangoDatabase.find(@db_name, %{"company" => "foobar"}, use_index: [], allow_fallback: false) do
-      {:ok, _} -> assert flunk("did not fail due to missing use_index without suitable indexes")
-      {:error, resp} -> assert resp.status_code == 400
-    end
-  end
+      test "use index without fallback fails for empty index" do
+        {:error, resp} = MangoDatabase.find(unquote(db), %{"company" => "foobar"}, use_index: [], allow_fallback: false)
+        assert resp.status_code == 400
+      end
 
-  test "use index without fallback fails for invalid index no fallback exists" do
-    case MangoDatabase.find(@db_name, %{"company" => "foobar"}, use_index: "invalid", allow_fallback: false) do
-      {:ok, _} -> assert flunk("did not fail on invalid index for use_index")
-      {:error, resp} -> assert resp.status_code == 400
-    end
-  end
+      test "use index without fallback fails for invalid index no fallback exists" do
+        {:error, resp} = MangoDatabase.find(unquote(db), %{"company" => "foobar"}, use_index: "invalid", allow_fallback: false)
+        assert resp.status_code == 400
+      end
 
-  test "index without fallback" do
-    case MangoDatabase.find(@db_name, %{"manager" => true}, allow_fallback: false) do
-      {:ok, docs} -> assert length(docs) > 0
-      {:error, _} -> assert flunk("fail on usable indexes")
-    end
-  end
+      test "index without fallback" do
+        {:ok, docs} = MangoDatabase.find(unquote(db), %{"manager" => true}, allow_fallback: false)
+        assert length(docs) > 0
+      end
 
-  test "no index without fallback" do
-    case MangoDatabase.find(@db_name, %{"company" => "foobar"}, allow_fallback: false) do
-      {:ok, _} -> assert flunk("did not fail on no usable indexes")
-      {:error, resp} -> assert resp.status_code == 400
+      test "no index without fallback" do
+        {:error, resp} = MangoDatabase.find(unquote(db), %{"company" => "foobar"}, allow_fallback: false)
+        assert resp.status_code == 400
+      end
     end
   end
 end
 
 defmodule JSONIndexSelectionTest do
   use CouchTestCase
+  require IndexSelectionTest
 
   @db_name "json-index-selection"
 
   setup do
     UserDocs.setup(@db_name)
   end
+
+  IndexSelectionTest.describe(@db_name)
 
   test "uses all docs when fields do not match selector" do
     # index exists on ["company", "manager"] but not ["company"]
@@ -301,7 +290,7 @@ defmodule JSONIndexSelectionTest do
     {:ok, docs} = MangoDatabase.find(@db_name, selector)
     assert length(docs) == 1
     assert Enum.at(docs, 0)["company"] == "Pharmex"
-    assert "manager" != Enum.at(docs, 0)
+    assert not Map.has_key?(Enum.at(docs, 0), "manager")
 
     {:ok, resp_explain} = MangoDatabase.find(@db_name, selector, explain: true)
     assert resp_explain["index"]["type"] == "special"
@@ -314,7 +303,7 @@ defmodule JSONIndexSelectionTest do
     {:ok, docs} = MangoDatabase.find(@db_name, selector)
     assert length(docs) == 1
     assert Enum.at(docs, 0)["company"] == "Pharmex"
-    assert "manager" != Enum.at(docs, 0)
+    assert not Map.has_key?(Enum.at(docs, 0), "manager")
 
     {:ok, resp_explain} = MangoDatabase.find(@db_name, selector, explain: true)
     assert resp_explain["index"]["type"] == "special"
@@ -350,7 +339,7 @@ defmodule TextIndexSelectionTest do
   test "with or" do
     {:ok, resp} = MangoDatabase.find(@db_name,
     %{
-      "$or": [
+      "$or" => [
           %{"name.first" => "Stephanie"},
           %{"name.last" => "This doesn't have to match anything."},
         ]

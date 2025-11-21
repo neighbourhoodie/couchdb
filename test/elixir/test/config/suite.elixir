@@ -735,7 +735,7 @@
   "IgnoreDesignDocsForAllDocsIndexTests": [
     "should not return design docs"
   ],
-  "IndexSelectionTest": [
+  "JSONIndexSelectionTest": [
     "basic",
     "with and",
     "with nested and",
@@ -758,9 +758,7 @@
     "use index without fallback fails for empty index",
     "use index without fallback fails for invalid index no fallback exists",
     "index without fallback",
-    "no index without fallback"
-  ],
-  "JSONIndexSelectionTest": [
+    "no index without fallback",
     "uses all docs when fields do not match selector",
     "uses all docs when selector doesnt require fields to exist"
   ]
