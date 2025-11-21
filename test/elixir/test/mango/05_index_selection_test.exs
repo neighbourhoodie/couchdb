@@ -216,7 +216,8 @@ defmodule IndexSelectionTest do
             }
           },
         }
-        assert {:error, _} = MangoDatabase.save_docs(unquote(db), [design_doc])
+        # fails if the result does not match the pattern {:error, _}
+        {:error, _} = MangoDatabase.save_docs(unquote(db), [design_doc])
       end
 
       test "explain sort reverse" do
