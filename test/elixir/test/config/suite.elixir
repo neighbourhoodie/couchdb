@@ -734,5 +734,17 @@
   ],
   "IgnoreDesignDocsForAllDocsIndexTests": [
     "should not return design docs"
+  ],
+  "MultiValueFieldJSONTests": [
+    "can query with name",
+    "can query with name subfield",
+    "can query with name range",
+    "can query with age and name range"
+  ],
+  "MultiValueFieldAllDocsTests": [
+    "can query with name",
+    "can query with name subfield",
+    "can query with name range",
+    "can query with age and name range"
   ]
 }
