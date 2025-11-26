@@ -734,5 +734,8 @@
   ],
   "IgnoreDesignDocsForAllDocsIndexTests": [
     "should not return design docs"
-  ]
+  ],
+  "TextIndexCheckTests": [
+    "create text index"
+  ],
 }
