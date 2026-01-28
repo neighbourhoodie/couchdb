@@ -1087,4 +1087,91 @@ match_beginswith_test() ->
         check_beginswith(<<"user_id">>, InvalidArg)
     ).
 
+bench(Cases) ->
+    Benches = lists:map(
+        fun({_, Sel0, Doc}) ->
+            Sel = normalize(Sel0),
+            #{runner => fun() -> match_int(Sel, Doc) end}
+        end,
+        Cases
+    ),
+    Results = erlperf:compare(Benches, #{}),
+    ?debugFmt("", []),
+    lists:foreach(
+        fun({{Name, _, _}, Result}) ->
+            ?debugFmt("bench [~s] = ~p", [Name, Result])
+        end,
+        lists:zip(Cases, Results)
+    ).
+
+bench_test() ->
+    bench([
+        {
+            "1 field",
+            {[{<<"a">>, 1}]},
+            {[{<<"a">>, 1}]}
+        },
+        {
+            "3 sibling fields",
+            {[{<<"a">>, 1}, {<<"b">>, 2}, {<<"c">>, 3}]},
+            {[{<<"a">>, 1}, {<<"b">>, 2}, {<<"c">>, 3}]}
+        },
+        {
+            "3 nested fields",
+            {[{<<"a">>, {[{<<"b">>, {[{<<"c">>, 1}]}}]}}]},
+            {[{<<"a">>, {[{<<"b">>, {[{<<"c">>, 1}]}}]}}]}
+        },
+        {
+            "allMatch: 1 field",
+            {[
+                {<<"a">>,
+                    {[
+                        {<<"$allMatch">>,
+                            {[
+                                {<<"b">>, {[{<<"$gt">>, 0}]}}
+                            ]}}
+                    ]}}
+            ]},
+            {[
+                {<<"a">>, [{[{<<"b">>, N}]} || N <- lists:seq(1, 10)]}
+            ]}
+        },
+        {
+            "allMatch: 3 sibling fields",
+            {[
+                {<<"a">>,
+                    {[
+                        {<<"$allMatch">>,
+                            {[
+                                {<<"b">>, {[{<<"$gt">>, 0}]}},
+                                {<<"c">>, {[{<<"$gt">>, 0}]}},
+                                {<<"d">>, {[{<<"$gt">>, 0}]}}
+                            ]}}
+                    ]}}
+            ]},
+            {[
+                {<<"a">>, [
+                    {[{<<"b">>, N}, {<<"c">>, N}, {<<"d">>, N}]}
+                 || N <- lists:seq(1, 10)
+                ]}
+            ]}
+        },
+        {
+            "allMatch: 3 nested fields",
+            {[
+                {<<"a">>,
+                    {[
+                        {<<"$allMatch">>,
+                            {[{<<"b">>, {[{<<"c">>, {[{<<"d">>, {[{<<"$gt">>, 0}]}}]}}]}}]}}
+                    ]}}
+            ]},
+            {[
+                {<<"a">>, [
+                    {[{<<"b">>, {[{<<"c">>, {[{<<"d">>, N}]}}]}}]}
+                 || N <- lists:seq(1, 10)
+                ]}
+            ]}
+        }
+    ]).
+
 -endif.
